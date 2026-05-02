@@ -398,6 +398,10 @@ public class DodgerMod extends Mod {
         if (evade.len2() > 0.01f) {
             finalMove = evade;
             lastWasEvade = true;
+        } else if (dodger.preferStandStill) {
+            // стоять безопаснее чем GOTO в pivot — не применяем GOTO
+            finalMove = lastFinal.setZero();
+            lastWasEvade = true;  // считаем как evade (защитное действие)
         } else {
             finalMove = gotoMove;
             lastWasEvade = false;

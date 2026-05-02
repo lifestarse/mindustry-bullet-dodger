@@ -50,6 +50,8 @@ public final class BulletDodger {
     public int   lastSamples;
     public int   lastSteps;
     public int   lastBeam;
+    /** true когда стоять безопаснее чем идти в pivot — DodgerMod не должен применять GOTO. */
+    public boolean preferStandStill;
 
     // тумблеры фич (читаются один раз за compute, дефолт true = текущее поведение)
     private boolean fPhysics;
@@ -304,7 +306,15 @@ public final class BulletDodger {
         }
 
         // выходим если оба безопасны (стоять и идти в pivot)
+        preferStandStill = false;
         if (dangerStill <= 1e-3f && dangerIntent <= 1e-3f) return evade;
+
+        // если идти в pivot опасно, а стоять — нет, флаг "стоять и не идти".
+        // DodgerMod увидит флаг и не применит GOTO.
+        if (dangerIntent > 1e-3f && dangerStill <= 1e-3f) {
+            preferStandStill = true;
+            return evade;  // zero вектор: стоять
+        }
 
         // используем максимум из двух как baseline для сравнения с альтернативами
         float baselineDanger = Math.max(dangerStill, dangerIntent);
