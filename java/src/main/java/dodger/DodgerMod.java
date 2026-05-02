@@ -60,7 +60,7 @@ public class DodgerMod extends Mod {
             // passive: мод не баитит, не управляет — но перехватывает движение когда летит пуля.
             t.checkPref(KEY_PASSIVE, false);
             // тюнинг beam search'а — точность vs CPU
-            t.sliderPref("dodger.samples",   BulletDodger.DEFAULT_SAMPLES,    90, 720, 90,
+            t.sliderPref("dodger.samples",   BulletDodger.DEFAULT_SAMPLES,    90, 7200, 90,
                 v -> v + " dirs/step");
             t.sliderPref("dodger.steps",     BulletDodger.DEFAULT_STEPS,       1,   3,  1,
                 v -> v + " step" + (v == 1 ? "" : "s"));

@@ -124,7 +124,7 @@ public final class BulletDodger {
         if (unit == null || unit.dead) return evade;
 
         // ---- читаем настройки ----
-        int samples = clampInt(Core.settings.getInt("dodger.samples", DEFAULT_SAMPLES), 8, 720);
+        int samples = clampInt(Core.settings.getInt("dodger.samples", DEFAULT_SAMPLES), 8, 7200);
         int steps   = clampInt(Core.settings.getInt("dodger.steps",   DEFAULT_STEPS),   1, 3);
         int beam    = clampInt(Core.settings.getInt("dodger.beamWidth", DEFAULT_BEAM_WIDTH), 1, BEAM_MAX);
         // physics OFF по умолчанию: мы пишем unit.vel.set, скорость меняется мгновенно.
