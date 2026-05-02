@@ -34,6 +34,8 @@ public class DodgerMod extends Mod {
     private static final String KEY_ENABLED   = "dodger.enabled";
     private static final String KEY_MOVE_PREF = "dodger.movePref";
     private static final String KEY_PASSIVE   = "dodger.passive";
+    private static final String KEY_HUNT      = "dodger.hunt";
+    private static final float  HUNT_RANGE    = 600f;
     private static final int    REPLAN_FALLBACK_TICKS = 60;
     private static final int    LOG_PERIOD_TICKS = 60;
 
@@ -62,6 +64,8 @@ public class DodgerMod extends Mod {
             t.checkPref(KEY_MOVE_PREF, false);
             // passive: мод не баитит, не управляет — но перехватывает движение когда летит пуля.
             t.checkPref(KEY_PASSIVE, false);
+            // hunt: дрон сам преследует ближайшего вражеского юнита/игрока, стреляет, доджит.
+            t.checkPref(KEY_HUNT, false);
             // тюнинг beam search'а — точность vs CPU
             t.sliderPref("dodger.samples",   BulletDodger.DEFAULT_SAMPLES,    90, 7200, 90,
                 v -> v + " dirs/step");
@@ -136,7 +140,23 @@ public class DodgerMod extends Mod {
     private boolean isEnabled()        { return Core.settings.getBool(KEY_ENABLED, false); }
     private boolean useMovePref()      { return Core.settings.getBool(KEY_MOVE_PREF, false); }
     private boolean isPassive()        { return Core.settings.getBool(KEY_PASSIVE, false); }
+    private boolean isHunt()           { return Core.settings.getBool(KEY_HUNT, false); }
     private void    setEnabled(boolean v) { Core.settings.put(KEY_ENABLED, v); }
+
+    /** Поиск ближайшего враждебного юнита в HUNT_RANGE. */
+    private Unit findHuntTarget(Unit me) {
+        Unit[] best = { null };
+        float[] bestD2 = { HUNT_RANGE * HUNT_RANGE };
+        Groups.unit.each(u -> {
+            if (u == null || u.dead) return;
+            if (u == me) return;
+            if (u.team == me.team) return;
+            float dx = u.x - me.x, dy = u.y - me.y;
+            float d2 = dx*dx + dy*dy;
+            if (d2 < bestD2[0]) { bestD2[0] = d2; best[0] = u; }
+        });
+        return best[0];
+    }
 
     /**
      * Заполняет dodger.zones списком no-dodge зон вокруг юнита:
@@ -212,6 +232,55 @@ public class DodgerMod extends Mod {
                     dodger.bulletsScanned, dodger.enemyBullets, dodger.threatCount, dodger.bestDanger,
                     lastWasEvade ? "EVADE" : "IDLE",
                     lastFinal.x, lastFinal.y, unit.vel.x, unit.vel.y));
+                ticksSinceLog = 0;
+            }
+            return;
+        }
+
+        // HUNT MODE: преследуем ближайшего вражеского юнита и стреляем по нему,
+        // одновременно уворачиваясь от пуль вокруг.
+        if (isHunt()) {
+            Unit target = findHuntTarget(unit);
+            populateZones(unit);
+            Vec2 evade = dodger.compute(unit, target == null ? null : new Vec2(target.x, target.y));
+            Vec2 finalMove;
+            if (evade.len2() > 0.01f) {
+                finalMove = evade;
+                lastWasEvade = true;
+            } else if (target != null) {
+                // движемся к цели, останавливаемся внутри радиуса оружия
+                float dx = target.x - unit.x, dy = target.y - unit.y;
+                float r  = arc.math.Mathf.sqrt(dx*dx + dy*dy);
+                float keepDist = Math.max(40f, unit.range() * 0.7f);
+                float speed = unit.type.speed;
+                if (r > keepDist + 4f) {
+                    finalMove = lastFinal.set(dx / r * speed, dy / r * speed);
+                } else {
+                    finalMove = lastFinal.setZero();
+                }
+                lastWasEvade = false;
+            } else {
+                finalMove = lastFinal.setZero();
+                lastWasEvade = false;
+            }
+            lastFinal.set(finalMove);
+            unit.vel.set(finalMove);
+
+            // прицеливание + стрельба
+            if (target != null) {
+                unit.aim(target.x, target.y);
+                Vars.player.shooting = true;
+            } else {
+                Vars.player.shooting = false;
+            }
+
+            if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
+                Log.info(String.format(
+                    "[dodger HUNT] target=%s dist=%.0f | scanned=%d enemy=%d threats=%d danger=%.2f | mode=%s",
+                    target != null ? target.type.name : "none",
+                    target != null ? arc.math.Mathf.dst(target.x, target.y, unit.x, unit.y) : 0f,
+                    dodger.bulletsScanned, dodger.enemyBullets, dodger.threatCount, dodger.bestDanger,
+                    lastWasEvade ? "EVADE" : "CHASE"));
                 ticksSinceLog = 0;
             }
             return;
