@@ -42,6 +42,10 @@ public class DodgerMod extends Mod {
     private final PivotPlanner    planner = new PivotPlanner();
     private final OrbitController orbiter = new OrbitController();
     private final BulletDodger    dodger  = new BulletDodger();
+    private final HuntController  hunter  = new HuntController();
+    /** Original controller (Player obj), кэшируем для restore. */
+    private mindustry.entities.units.UnitController originalController = null;
+    private boolean huntActive = false;
 
     private boolean replanPending = true;
     private int     ticksSinceReplan = 0;
@@ -237,9 +241,15 @@ public class DodgerMod extends Mod {
             return;
         }
 
-        // HUNT MODE: преследуем ближайшего вражеского юнита и стреляем по нему,
-        // одновременно уворачиваясь от пуль вокруг.
+        // HUNT MODE: подключаем кастомный controller для полного перехвата управления.
         if (isHunt()) {
+            // Activate: подменяем unit.controller на наш HuntController.
+            if (!huntActive || unit.controller() != hunter) {
+                originalController = unit.controller();
+                unit.controller(hunter);
+                huntActive = true;
+            }
+
             Unit target = findHuntTarget(unit);
             populateZones(unit);
             Vec2 evade = dodger.compute(unit, target == null ? null : new Vec2(target.x, target.y));
@@ -248,7 +258,6 @@ public class DodgerMod extends Mod {
                 finalMove = evade;
                 lastWasEvade = true;
             } else if (target != null) {
-                // движемся к цели, останавливаемся внутри радиуса оружия
                 float dx = target.x - unit.x, dy = target.y - unit.y;
                 float r  = arc.math.Mathf.sqrt(dx*dx + dy*dy);
                 float keepDist = Math.max(40f, unit.range() * 0.7f);
@@ -264,34 +273,11 @@ public class DodgerMod extends Mod {
                 lastWasEvade = false;
             }
             lastFinal.set(finalMove);
-            unit.vel.set(finalMove);
 
-            // прицеливание + стрельба: перебиваем игровой ввод полностью.
-            // ВАЖНО: rotation пишем напрямую, не через lookAt (там moveToward с rotateSpeed —
-            // одна-две градуса за тик, не успевает за курсором, который продолжает дёргать).
-            if (target != null) {
-                float ang = arc.math.Mathf.atan2(target.y - unit.y, target.x - unit.x)
-                            * arc.math.Mathf.radDeg;
-                unit.rotation = ang;
-                unit.aim(target.x, target.y);
-                Vars.player.mouseX = target.x;
-                Vars.player.mouseY = target.y;
-                Vars.player.shooting = true;
-                // force weapon mounts shoot/rotate flags напрямую, чтобы не зависеть от controller'а
-                try {
-                    for (var mount : unit.mounts) {
-                        mount.shoot = true;
-                        mount.rotate = true;
-                        mount.aimX = target.x;
-                        mount.aimY = target.y;
-                    }
-                } catch (Throwable t) { /* mounts API мог измениться, не критично */ }
-            } else {
-                Vars.player.shooting = false;
-                try {
-                    for (var mount : unit.mounts) mount.shoot = false;
-                } catch (Throwable t) { }
-            }
+            // отдаём данные в HuntController — он применит их в своём updateUnit() на след. тике
+            hunter.setTarget(target);
+            hunter.setMove(finalMove);
+            hunter.setShooting(target != null);
 
             if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
                 Log.info(String.format(
@@ -303,6 +289,13 @@ public class DodgerMod extends Mod {
                 ticksSinceLog = 0;
             }
             return;
+        } else if (huntActive) {
+            // Deactivate: вернуть оригинального controller (Player).
+            if (originalController != null && unit.controller() == hunter) {
+                unit.controller(originalController);
+            }
+            huntActive = false;
+            originalController = null;
         }
 
         ticksSinceReplan++;
