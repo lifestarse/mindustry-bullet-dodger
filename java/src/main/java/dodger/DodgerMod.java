@@ -1,4 +1,4 @@
-// Build: 16
+// Build: 17
 package dodger;
 
 import arc.Core;
@@ -86,6 +86,16 @@ public class DodgerMod extends Mod {
             t.checkPref("dodger.pingAuto", true);  // если в multiplayer — берём пинг из netClient
             t.sliderPref("dodger.pingMs", 0, 0, 500, 10,
                 v -> v == 0 ? "off" : v + " ms (manual)");
+
+            // === Цели для байта: какие турели стрелять/уворачиваться ===
+            t.add("[accent]Bait turrets:").left().row();
+            for (String n : TurretCatalog.BAIT_DEFAULT) {
+                t.checkPref("dodger.bait." + n, true);  // default ON
+            }
+            t.add("[lightgray]Optional (рискованные):").left().row();
+            for (String n : TurretCatalog.BAIT_OPTIONAL) {
+                t.checkPref("dodger.bait." + n, false); // default OFF
+            }
         });
 
         Events.on(EventType.BlockBuildEndEvent.class, e -> {
