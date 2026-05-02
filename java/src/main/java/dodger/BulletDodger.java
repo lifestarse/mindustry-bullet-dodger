@@ -36,7 +36,10 @@ public final class BulletDodger {
     private static final float PIVOT_BIAS    = 0.01f;
     private static final float HYST_WEIGHT   = 0.5f;
     private static final float MOTION_WEIGHT = 0.4f; // бонус за продолжение текущего движения
-    private static final float SAFETY_MARGIN = 2f;   // px поверх реальной hit-зоны
+    /** Default px поверх реальной hit-зоны. Конфигурируется через slider. */
+    private static final float DEFAULT_SAFETY_MARGIN = 5f;
+    /** Текущий margin (читается из Settings каждый compute). */
+    private float safetyMargin = DEFAULT_SAFETY_MARGIN;
 
     /** Дефолты для settings, если ключи ещё не заданы. */
     public static final int    DEFAULT_SAMPLES    = 360;
@@ -241,6 +244,7 @@ public final class BulletDodger {
         fSubtick      = Core.settings.getBool("dodger.subtick",      true);
         fPreferMotion = Core.settings.getBool("dodger.preferMotion", true);
         fEdgeMul = Math.max(0f, Math.min(2f, Core.settings.getInt("dodger.edgePenalty", 100) / 100f));
+        safetyMargin = Core.settings.getInt("dodger.safetyMargin", (int)DEFAULT_SAFETY_MARGIN);
         unitR = unit.type.hitSize * 0.5f;
 
         // нормализуем текущее движение юнита для motion-continuity бонуса.
@@ -504,7 +508,7 @@ public final class BulletDodger {
             if (b.type.splashDamage > 0 && b.type.splashDamageRadius > bulletR) {
                 bulletR = b.type.splashDamageRadius;
             }
-            float thr = unitR + bulletR + SAFETY_MARGIN;
+            float thr = unitR + bulletR + safetyMargin;
             float thr2 = thr * thr;
 
             float minD2; float minTf;
@@ -689,7 +693,7 @@ public final class BulletDodger {
             }
             float bulletR = b.type.hitSize;
             if (bulletR < 1f) bulletR = 4f;
-            float thr = unitR + bulletR + SAFETY_MARGIN;
+            float thr = unitR + bulletR + safetyMargin;
             float thr2 = thr * thr;
             float effectiveOffset = bulletTimeOffset + pingTicks;
             float minD2 = Float.POSITIVE_INFINITY;

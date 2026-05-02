@@ -98,6 +98,10 @@ public class DodgerMod extends Mod {
             // edge penalty: штраф за качание на пределе радиуса. 0 = выкл, 100 = дефолт.
             t.sliderPref("dodger.edgePenalty", 100, 0, 200, 10,
                 v -> v == 0 ? "off" : v + "% edge band");
+            // safetyMargin: запас (px) поверх реальной hit-зоны при оценке столкновения.
+            // Чем больше — тем шире "недопустимое сближение", меньше грейзов, но больше evade'ов.
+            t.sliderPref("dodger.safetyMargin", 5, 0, 20, 1,
+                v -> v + " px hit margin");
             // тумблеры post-7 фич — выключаем по одному для диагностики
             // physics: ВЫКЛ по умолчанию, т.к. vel.set игнорит accel. Включать только с movePref.
             t.checkPref("dodger.physics",      false); // build 8: физическая симуляция accel/drag
