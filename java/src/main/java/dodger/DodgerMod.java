@@ -68,8 +68,8 @@ public class DodgerMod extends Mod {
                 v -> "beam " + v);
             // ебанутость: минимальная безопасная дистанция от pivot до турели.
             // 20 px — суицид (3 тайла, борода с турелью), 120 — безопаснее (15 тайлов).
-            t.sliderPref("dodger.minDist", PivotPlanner.DEFAULT_MIN_DIST,    20, 120,  5,
-                v -> v + " px (lower = aggressiver)");
+            t.sliderPref("dodger.minDist", PivotPlanner.DEFAULT_MIN_DIST,     0, 120,  5,
+                v -> (v == 0 ? "off" : v + " px") + " (0 = нет ограничения)");
             // тумблеры post-7 фич — выключаем по одному для диагностики
             // physics: ВЫКЛ по умолчанию, т.к. vel.set игнорит accel. Включать только с movePref.
             t.checkPref("dodger.physics",      false); // build 8: физическая симуляция accel/drag

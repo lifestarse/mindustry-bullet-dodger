@@ -52,8 +52,8 @@ public final class PivotPlanner {
     private boolean fDensityCap = true;
 
     public boolean replan(float ux, float uy, Team playerTeam) {
-        // обновляем настройки
-        minDist = Math.max(20f, Math.min(120f, Core.settings.getInt("dodger.minDist", DEFAULT_MIN_DIST)));
+        // обновляем настройки. minDist=0 → ограничение фактически выключено.
+        minDist = Math.max(0f, Math.min(120f, Core.settings.getInt("dodger.minDist", DEFAULT_MIN_DIST)));
         fDensityCap = Core.settings.getBool("dodger.densityCap", true);
         bait.clear();
         death.clear();
