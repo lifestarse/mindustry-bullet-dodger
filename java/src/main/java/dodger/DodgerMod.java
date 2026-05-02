@@ -266,10 +266,15 @@ public class DodgerMod extends Mod {
             lastFinal.set(finalMove);
             unit.vel.set(finalMove);
 
-            // прицеливание + стрельба
+            // прицеливание + стрельба: перебиваем игровой ввод полностью.
+            // mouseX/mouseY переписываем заранее, чтобы Player.update в следующий тик
+            // взял уже наши координаты, а не курсор игрока.
             if (target != null) {
-                unit.aim(target.x, target.y);
+                Vars.player.mouseX = target.x;
+                Vars.player.mouseY = target.y;
                 Vars.player.shooting = true;
+                unit.aim(target.x, target.y);
+                unit.lookAt(target.x, target.y);
             } else {
                 Vars.player.shooting = false;
             }
