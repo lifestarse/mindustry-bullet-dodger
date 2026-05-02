@@ -208,6 +208,15 @@ public final class BulletDodger {
     }
 
     public Vec2 compute(Unit unit, Vec2 pivot) {
+        return compute(unit, pivot, null);
+    }
+
+    /**
+     * compute с явным "intended" направлением — то, куда DodgerMod планирует двигать дрона
+     * если bullet dodger не сработает. Если intended-направление опасно, мы обязаны увернуться,
+     * даже если "стоять на месте" безопасно.
+     */
+    public Vec2 compute(Unit unit, Vec2 pivot, Vec2 intended) {
         evade.setZero();
         threatCount = 0;
         bestDanger = 0;
@@ -282,17 +291,32 @@ public final class BulletDodger {
 
         if (nearby.isEmpty()) return evade;
 
-        // baseline
+        // baseline 1: стоять на месте
         Vec2 endVel = simulate(ux, uy, uvx, uvy, 0f, 0f, speed, accel, drag);
         float dangerStill = scoreSim(0f) + zonesPenalty() + edgePenalty();
-        // если ни пуль не угрожают, ни в зоне не сидим — выходим, GOTO рулит
-        if (dangerStill <= 1e-3f) return evade;
+
+        // baseline 2: opanered intended-направление (GOTO в pivot)
+        // даже если стоять безопасно, движение в pivot может пройти через пулю.
+        float dangerIntent = 0f;
+        if (intended != null && intended.len2() > 0.01f) {
+            simulate(ux, uy, uvx, uvy, intended.x, intended.y, speed, accel, drag);
+            dangerIntent = scoreSim(0f) + zonesPenalty() + edgePenalty();
+        }
+
+        // выходим если оба безопасны (стоять и идти в pivot)
+        if (dangerStill <= 1e-3f && dangerIntent <= 1e-3f) return evade;
+
+        // используем максимум из двух как baseline для сравнения с альтернативами
+        float baselineDanger = Math.max(dangerStill, dangerIntent);
+        // ВАЖНО: после simulate intended мы перетёрли simX/simY. Перезапускаем для baseline:
+        simulate(ux, uy, uvx, uvy, 0f, 0f, speed, accel, drag);
 
         float currentBias = pivotBias(ux, uy, pivot);
 
         // ---------- STEP 1 ----------
         resetBeam(beam1, beam);
-        insertBeam(beam1, beam, dangerStill + currentBias, 0f, 0f,
+        // baseline в beam = max из двух (опасность тех вариантов которые DodgerMod применит без evade)
+        insertBeam(beam1, beam, baselineDanger + currentBias, 0f, 0f,
                    ux, uy, uvx*(1-drag), uvy*(1-drag), -1);
 
         for (int k = 0; k < samples; k++) {

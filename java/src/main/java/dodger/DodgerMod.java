@@ -390,13 +390,16 @@ public class DodgerMod extends Mod {
         }
 
         populateZones(unit);
-        Vec2 evade = dodger.compute(unit, driftedPivot);
+        // сначала вычисляем GOTO направление к pivot, передаём его в compute как "intended"
+        // — bullet dodger проверит опасность движения В pivot, а не только стояния на месте.
+        Vec2 gotoMove = orbiter.step(unit, driftedPivot);
+        Vec2 evade = dodger.compute(unit, driftedPivot, gotoMove);
         Vec2 finalMove;
         if (evade.len2() > 0.01f) {
             finalMove = evade;
             lastWasEvade = true;
         } else {
-            finalMove = orbiter.step(unit, driftedPivot);
+            finalMove = gotoMove;
             lastWasEvade = false;
         }
         lastFinal.set(finalMove);
