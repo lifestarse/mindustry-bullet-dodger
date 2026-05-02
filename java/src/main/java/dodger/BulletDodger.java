@@ -1,4 +1,4 @@
-// Build: 6
+// Build: 8
 package dodger;
 
 import arc.math.Mathf;
@@ -9,29 +9,31 @@ import mindustry.gen.Groups;
 import mindustry.gen.Unit;
 
 /**
- * Sampling-based реактивное уклонение.
+ * Sampling-based уклонение с физической симуляцией юнита.
  *
- * Каждый тик:
- *   1. Собираем все вражеские пули в SCAN_R.
- *   2. Сэмплируем N направлений (по кругу).
- *   3. Для каждого направления считаем "опасность" = взвешенную сумму
- *      пуль, которые попали бы в юнита, если бы он двигался в эту сторону.
- *   4. Возвращаем направление с минимумом опасности (масштабированное до speed).
+ * Улучшения относительно build 6:
+ *   #1 Инерция: симулируем accel/drag/limit юнита потактово, а не "мгновенная скорость".
+ *   #3 Lifetime: пули, которые сами развеются раньше попадания, игнорим.
+ *   #5 Hysteresis: бонус за продолжение прежнего направления (давит дребезг).
+ *   #7 Damage weight: пуля 80 урона "опаснее" пули 9 урона, weight = b.damage/15 в [0.5..5].
  *
- * Опасность одной пули в кандидатной траектории юнита (vel = (dx,dy)):
- *   t* = решение CPA для двух движущихся объектов
- *   если t* в [0, REACT_HORIZON] И dCPA < SAFE_R: contribute (SAFE_R-dCPA)*(REACT_HORIZON-t)/REACT_HORIZON
- *
- * Если ни в одном из 16 направлений опасности нет — возвращаем zero (пусть GOTO работает).
+ * Алгоритм:
+ *   Для каждого из SAMPLES направлений:
+ *     1. Симулируем 26 тиков движения юнита (vel += norm * speed * accel; vel *= 1-drag; clip).
+ *     2. Получаем массив позиций юнита simX[t], simY[t] для t=0..H.
+ *     3. Для каждой пули считаем мин. расстояние до simX/simY на интервале [0, min(H, remaining_lifetime)].
+ *     4. Если minDist < SAFE_R — contribute (SAFE_R-minDist)*(H-minT)/H * damageWeight.
+ *   Плюс bias за дистанцию до pivot и continuity bonus.
  */
 public final class BulletDodger {
 
     private static final float REACT_HORIZON  = 25f;
+    private static final int   H              = 25;
     private static final float SAFE_R         = 12f;
     private static final float SCAN_R         = 200f;
     private static final int   SAMPLES        = 720;
-    /** Бонус за близость к pivot после уклонения. ~ 1 ед. опасности ≈ 100 px дрейфа. */
     private static final float PIVOT_BIAS     = 0.01f;
+    private static final float HYST_WEIGHT    = 0.5f;
 
     public int   threatCount;
     public float bestDanger;
@@ -39,7 +41,12 @@ public final class BulletDodger {
     public int   enemyBullets;
 
     private final Seq<Bullet> nearby = new Seq<>(64);
-    private final Vec2 evade = new Vec2();
+    private final Vec2  evade = new Vec2();
+    private final float[] simX = new float[H + 1];
+    private final float[] simY = new float[H + 1];
+
+    /** Предыдущий выбранный вектор уклонения (для continuity-bonus). */
+    private float prevDx = 0f, prevDy = 0f;
 
     public Vec2 compute(Unit unit, Vec2 pivot) {
         evade.setZero();
@@ -53,6 +60,8 @@ public final class BulletDodger {
         final float ux = unit.x, uy = unit.y;
         final int   teamId = unit.team.id;
         final float speed = unit.type.speed;
+        final float accel = unit.type.accel;
+        final float drag  = unit.type.drag;
 
         nearby.clear();
         Groups.bullet.each(b -> {
@@ -68,11 +77,11 @@ public final class BulletDodger {
 
         if (nearby.isEmpty()) return evade;
 
-        // Сначала проверим: есть ли вообще угроза если стоять на месте?
-        float dangerStill = scoreDir(unit, 0f, 0f);
-        if (dangerStill <= 1e-3f) return evade; // ничего не угрожает — пусть GOTO работает
+        // baseline: симулируем "стоять на месте" (zero direction), считаем danger
+        simulate(unit, 0f, 0f, speed, accel, drag);
+        float dangerStill = scoreSim();
+        if (dangerStill <= 1e-3f) return evade;
 
-        // baseline: стоять на месте + bias от текущей дистанции до pivot
         float currentBias = pivotBias(unit.x, unit.y, pivot);
         float bestScore = dangerStill + currentBias;
         float bestDx = 0, bestDy = 0;
@@ -82,11 +91,14 @@ public final class BulletDodger {
             float a  = k * 2f * Mathf.PI / SAMPLES;
             float dx = Mathf.cos(a) * speed;
             float dy = Mathf.sin(a) * speed;
-            float danger = scoreDir(unit, dx, dy);
-            float fx = unit.x + dx * REACT_HORIZON;
-            float fy = unit.y + dy * REACT_HORIZON;
+            simulate(unit, dx, dy, speed, accel, drag);
+            float danger = scoreSim();
+            float fx = simX[H], fy = simY[H];
             float bias = pivotBias(fx, fy, pivot);
-            float s = danger + bias;
+            // continuity: bonus если близко к предыдущему направлению (cos угла)
+            // dx/speed * prevDx/speed = cos(angle) ∈ [-1..1]
+            float cont = -((dx*prevDx + dy*prevDy) / (speed*speed)) * HYST_WEIGHT;
+            float s = danger + bias + cont;
             if (s < bestScore) {
                 bestScore = s;
                 bestDx = dx;
@@ -98,64 +110,105 @@ public final class BulletDodger {
         bestDanger = bestScore;
 
         if (!foundBetter) {
-            // даже стояние не хуже чем все направления — стоим на месте,
-            // GOTO будет тянуть к pivot, лучше чем суицидальный уход
+            // даже стояние не хуже всех направлений
+            prevDx = 0; prevDy = 0;
             return evade;
         }
 
-        // Подсчитаем сколько пуль реально пролетит близко в выбранном направлении
-        threatCount = countHits(unit, bestDx, bestDy);
+        // пересимулируем выбранное и посчитаем "сколько реально цепанёт"
+        simulate(unit, bestDx, bestDy, speed, accel, drag);
+        threatCount = countSimHits();
+
+        prevDx = bestDx;
+        prevDy = bestDy;
         evade.set(bestDx, bestDy);
         return evade;
+    }
+
+    /** Заполняет simX/simY: позиция юнита на каждом тике [0..H] при пожелании vel=(dx,dy). */
+    private void simulate(Unit unit, float dx, float dy, float speed, float accel, float drag) {
+        // нормализованное направление желаемой скорости
+        float len = Mathf.sqrt(dx*dx + dy*dy);
+        float ndx = (len > 1e-4f) ? dx / len : 0f;
+        float ndy = (len > 1e-4f) ? dy / len : 0f;
+        float incrx = ndx * speed * accel;
+        float incry = ndy * speed * accel;
+        float damp  = 1f - drag;
+
+        float vx = unit.vel.x;
+        float vy = unit.vel.y;
+        float px = unit.x;
+        float py = unit.y;
+        simX[0] = px; simY[0] = py;
+        for (int t = 1; t <= H; t++) {
+            vx += incrx;
+            vy += incry;
+            vx *= damp;
+            vy *= damp;
+            float vlen2 = vx*vx + vy*vy;
+            if (vlen2 > speed*speed) {
+                float vlen = Mathf.sqrt(vlen2);
+                vx *= speed / vlen;
+                vy *= speed / vlen;
+            }
+            px += vx;
+            py += vy;
+            simX[t] = px;
+            simY[t] = py;
+        }
+    }
+
+    private float scoreSim() {
+        float total = 0;
+        for (int i = 0; i < nearby.size; i++) {
+            Bullet b = nearby.get(i);
+            // оставшееся время жизни пули (тиков)
+            float remain = b.type.lifetime - b.time;
+            int   maxT = (int) Math.min(H, Math.max(0, remain));
+            if (maxT <= 0) continue;
+
+            float minD2 = Float.POSITIVE_INFINITY;
+            int   minT  = 0;
+            for (int t = 0; t <= maxT; t++) {
+                float bx = b.x + b.vel.x * t;
+                float by = b.y + b.vel.y * t;
+                float dx = bx - simX[t];
+                float dy = by - simY[t];
+                float d2 = dx*dx + dy*dy;
+                if (d2 < minD2) { minD2 = d2; minT = t; }
+            }
+            if (minD2 >= SAFE_R*SAFE_R) continue;
+            float dCPA = Mathf.sqrt(minD2);
+            float wDam = Mathf.clamp(b.damage / 15f, 0.5f, 5f);
+            total += (SAFE_R - dCPA) * (REACT_HORIZON - minT) / REACT_HORIZON * wDam;
+        }
+        return total;
+    }
+
+    private int countSimHits() {
+        int n = 0;
+        for (int i = 0; i < nearby.size; i++) {
+            Bullet b = nearby.get(i);
+            float remain = b.type.lifetime - b.time;
+            int   maxT = (int) Math.min(H, Math.max(0, remain));
+            if (maxT <= 0) continue;
+            float minD2 = Float.POSITIVE_INFINITY;
+            for (int t = 0; t <= maxT; t++) {
+                float bx = b.x + b.vel.x * t;
+                float by = b.y + b.vel.y * t;
+                float dx = bx - simX[t];
+                float dy = by - simY[t];
+                float d2 = dx*dx + dy*dy;
+                if (d2 < minD2) minD2 = d2;
+            }
+            if (minD2 < SAFE_R*SAFE_R) n++;
+        }
+        return n;
     }
 
     private float pivotBias(float fx, float fy, Vec2 pivot) {
         if (pivot == null) return 0f;
         float dx = fx - pivot.x, dy = fy - pivot.y;
         return Mathf.sqrt(dx*dx + dy*dy) * PIVOT_BIAS;
-    }
-
-    private float scoreDir(Unit unit, float dx, float dy) {
-        float total = 0;
-        float ux = unit.x, uy = unit.y;
-        for (int i = 0; i < nearby.size; i++) {
-            Bullet b = nearby.get(i);
-            float A = b.x - ux;
-            float B = b.y - uy;
-            float C = b.vel.x - dx;
-            float D = b.vel.y - dy;
-            float vv = C*C + D*D;
-            if (vv < 1e-4f) continue;
-            float t = -(A*C + B*D) / vv;
-            if (t < 0 || t > REACT_HORIZON) continue;
-            float ex = A + C*t;
-            float ey = B + D*t;
-            float dCPA = Mathf.sqrt(ex*ex + ey*ey);
-            if (dCPA >= SAFE_R) continue;
-            // weight: ближе и скорее = больше штраф
-            total += (SAFE_R - dCPA) * (REACT_HORIZON - t) / REACT_HORIZON;
-        }
-        return total;
-    }
-
-    private int countHits(Unit unit, float dx, float dy) {
-        int n = 0;
-        float ux = unit.x, uy = unit.y;
-        for (int i = 0; i < nearby.size; i++) {
-            Bullet b = nearby.get(i);
-            float A = b.x - ux;
-            float B = b.y - uy;
-            float C = b.vel.x - dx;
-            float D = b.vel.y - dy;
-            float vv = C*C + D*D;
-            if (vv < 1e-4f) continue;
-            float t = -(A*C + B*D) / vv;
-            if (t < 0 || t > REACT_HORIZON) continue;
-            float ex = A + C*t;
-            float ey = B + D*t;
-            float dCPA = Mathf.sqrt(ex*ex + ey*ey);
-            if (dCPA < SAFE_R) n++;
-        }
-        return n;
     }
 }

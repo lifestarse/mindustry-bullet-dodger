@@ -1,4 +1,4 @@
-// Build: 7
+// Build: 8
 package dodger;
 
 import arc.math.Mathf;
@@ -33,6 +33,11 @@ public final class PivotPlanner {
     public static final float SCAN_R          = 600f;
     public static final float HYSTERESIS      = 1.15f;
     public static final float INNER_OFFSET    = 6f;
+
+    /** Сверху сколько турелей считаем "близко" — больше => плотный огонь. */
+    private static final float DENSITY_RADIUS = 80f;
+    /** При plotности больше этого штрафуем score линейно вниз. */
+    private static final int   DENSITY_SOFT_CAP = 3;
 
     private final Seq<Turret.TurretBuild> bait  = new Seq<>();
     private final Seq<Turret.TurretBuild> death = new Seq<>();
@@ -152,6 +157,7 @@ public final class PivotPlanner {
             if (dx*dx + dy*dy <= r*r) return -1f;
         }
         float total = 0f;
+        int   density = 0;          // сколько turrets в DENSITY_RADIUS — для штрафа
         for (Turret.TurretBuild t : bait) {
             float dx = x - t.x, dy = y - t.y;
             float d2 = dx*dx + dy*dy;
@@ -161,6 +167,12 @@ public final class PivotPlanner {
             float d = Mathf.sqrt(d2);
             float closeness = 1f - (d - MIN_PIVOT_DIST) / (rMax - MIN_PIVOT_DIST);
             total += 1f + closeness;
+            if (d2 < DENSITY_RADIUS*DENSITY_RADIUS) density++;
+        }
+        // штраф за слишком плотный огонь: больше DENSITY_SOFT_CAP "близких" — линейный спад
+        if (density > DENSITY_SOFT_CAP) {
+            float factor = Math.max(0f, 1f - (density - DENSITY_SOFT_CAP) * 0.3f);
+            total *= factor;
         }
         return total;
     }
