@@ -1,4 +1,4 @@
-// Build: 17
+// Build: 18
 package dodger;
 
 import arc.Core;
@@ -413,9 +413,13 @@ public final class BulletDodger {
                 maxT = H;
             }
 
-            // per-bullet threshold по реальному размеру пули
+            // per-bullet threshold по реальному размеру пули. Splash расширяет зону —
+            // при попадании "рядом" splashDamageRadius уносит дрону HP даже без прямого хита.
             float bulletR = b.type.hitSize;
             if (bulletR < 1f) bulletR = 4f;
+            if (b.type.splashDamage > 0 && b.type.splashDamageRadius > bulletR) {
+                bulletR = b.type.splashDamageRadius;
+            }
             float thr = unitR + bulletR + SAFETY_MARGIN;
             float thr2 = thr * thr;
 
@@ -431,10 +435,70 @@ public final class BulletDodger {
                 minTf = Float.intBitsToFloat((int)(packed & 0xFFFFFFFFL));
             }
 
-            if (minD2 >= thr2) continue;
-            float dCPA = Mathf.sqrt(minD2);
-            float wDam = fDamageWeight ? Mathf.clamp(b.damage / 15f, 0.5f, 5f) : 1f;
-            total += (thr - dCPA) * (REACT_HORIZON - minTf) / REACT_HORIZON * wDam;
+            if (minD2 < thr2) {
+                float dCPA = Mathf.sqrt(minD2);
+                float wDam = fDamageWeight ? Mathf.clamp(b.damage / 15f, 0.5f, 5f) : 1f;
+                total += (thr - dCPA) * (REACT_HORIZON - minTf) / REACT_HORIZON * wDam;
+            }
+
+            // Frag/lightning danger: при despawn пуля разлетается на осколки или метает молнии.
+            total += fragLightningDanger(b, bulletTimeOffset);
+        }
+        return total;
+    }
+
+    /**
+     * Дополнительная опасность для пуль с fragBullets или lightning.
+     * Моделируем "вспышку" в точке despawn'а: круглая зона радиуса = max(frag spread,
+     * lightning reach), активна на ширине fragLifetime тиков, проникающая опасность
+     * пропорциональна (1 - dist/zoneR) × количество фрагментов × вес урона.
+     */
+    private float fragLightningDanger(mindustry.gen.Bullet b, float bulletTimeOffset) {
+        var bt = b.type;
+        boolean hasFrag = bt.fragBullets > 0 && bt.fragBullet != null;
+        boolean hasLightning = bt.lightning > 0;
+        if (!hasFrag && !hasLightning) return 0f;
+
+        float effAge = b.time + bulletTimeOffset + pingTicks;
+        float ticksToDespawn = bt.lifetime - effAge;
+        if (ticksToDespawn > H + 20) return 0f; // взрыв далеко в будущем
+        if (ticksToDespawn < -30) return 0f;    // уже давно взорвался
+
+        float despawnTime = bulletTimeOffset + pingTicks + Math.max(0, ticksToDespawn);
+        float Px = b.x + b.vel.x * despawnTime;
+        float Py = b.y + b.vel.y * despawnTime;
+
+        float zoneR = 0f;
+        float zoneWeight = 0f;
+        float zoneLife = 30f;
+
+        if (hasFrag) {
+            var frag = bt.fragBullet;
+            float fragR = frag.speed * frag.lifetime;
+            if (fragR > zoneR) zoneR = fragR;
+            zoneWeight += bt.fragBullets * Mathf.clamp(frag.damage / 10f, 0.5f, 5f);
+            if (frag.lifetime > zoneLife) zoneLife = frag.lifetime;
+        }
+        if (hasLightning) {
+            float lr = bt.lightningLength * 8f; // сегменты ~8 px
+            if (lr > zoneR) zoneR = lr;
+            zoneWeight += bt.lightning * Mathf.clamp(bt.lightningDamage / 5f, 0.5f, 3f);
+        }
+
+        if (zoneR < 1f || zoneWeight < 0.1f) return 0f;
+        float zoneR2 = zoneR * zoneR;
+
+        int tStart = (int) Math.max(0f, ticksToDespawn);
+        int tEnd   = Math.min(H, (int) (ticksToDespawn + zoneLife));
+
+        float total = 0f;
+        for (int t = tStart; t <= tEnd; t++) {
+            float dx = simX[t] - Px, dy = simY[t] - Py;
+            float d2 = dx*dx + dy*dy;
+            if (d2 >= zoneR2) continue;
+            float d = Mathf.sqrt(d2);
+            float decay = (zoneR - d) / zoneR;
+            total += decay * zoneWeight * 0.3f;
         }
         return total;
     }
