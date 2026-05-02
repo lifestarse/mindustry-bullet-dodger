@@ -432,6 +432,10 @@ public final class BulletDodger {
         bestDanger = winner.score;
 
         if (rootStep.dx == 0f && rootStep.dy == 0f) {
+            // beam search решил что лучше стоять. Если мы ДО этого решили запустить beam,
+            // значит угрозы были (early-out не сработал). Ставим preferStandStill —
+            // иначе DodgerMod слепо применит gotoMove и нарвётся на пулю.
+            preferStandStill = true;
             prevDx = 0; prevDy = 0;
             return evade;
         }
