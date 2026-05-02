@@ -1,4 +1,4 @@
-// Build: 11
+// Build: 12
 package dodger;
 
 import arc.Core;
@@ -48,6 +48,12 @@ public final class BulletDodger {
     public int   lastSamples;
     public int   lastSteps;
     public int   lastBeam;
+
+    // тумблеры фич (читаются один раз за compute, дефолт true = текущее поведение)
+    private boolean fPhysics;
+    private boolean fLifetime;
+    private boolean fHysteresis;
+    private boolean fDamageWeight;
 
     private final Seq<Bullet> nearby = new Seq<>(64);
     private final Vec2  evade  = new Vec2();
@@ -115,6 +121,10 @@ public final class BulletDodger {
         int samples = clampInt(Core.settings.getInt("dodger.samples", DEFAULT_SAMPLES), 8, 720);
         int steps   = clampInt(Core.settings.getInt("dodger.steps",   DEFAULT_STEPS),   1, 3);
         int beam    = clampInt(Core.settings.getInt("dodger.beamWidth", DEFAULT_BEAM_WIDTH), 1, BEAM_MAX);
+        fPhysics      = Core.settings.getBool("dodger.physics",      true);
+        fLifetime     = Core.settings.getBool("dodger.lifetime",     true);
+        fHysteresis   = Core.settings.getBool("dodger.hysteresis",   true);
+        fDamageWeight = Core.settings.getBool("dodger.damageWeight", true);
         lastSamples = samples;
         lastSteps   = steps;
         lastBeam    = beam;
@@ -160,7 +170,7 @@ public final class BulletDodger {
             float danger = scoreSim(0f);
             float fx = simX[H], fy = simY[H];
             float bias = pivotBias(fx, fy, pivot);
-            float cont = -((dx*prevDx + dy*prevDy) / (speed*speed)) * HYST_WEIGHT;
+            float cont = fHysteresis ? -((dx*prevDx + dy*prevDy) / (speed*speed)) * HYST_WEIGHT : 0f;
             insertBeam(beam1, beam, danger + bias + cont, dx, dy, fx, fy, endVel.x, endVel.y, -1);
         }
 
@@ -212,7 +222,7 @@ public final class BulletDodger {
                               dx, dy, speed, accel, drag);
             float danger = scoreSim(bulletOffset);
             float bias = pivotBias(simX[H], simY[H], pivot);
-            float cont = -((dx*parent.dx + dy*parent.dy) / (speed*speed)) * HYST_WEIGHT * 0.3f;
+            float cont = fHysteresis ? -((dx*parent.dx + dy*parent.dy) / (speed*speed)) * HYST_WEIGHT * 0.3f : 0f;
             insertBeam(childBeam, beam, parent.score + danger + bias + cont, dx, dy,
                        simX[H], simY[H], endVel.x, endVel.y, parentIdx);
         }
@@ -257,6 +267,19 @@ public final class BulletDodger {
 
     private Vec2 simulate(float startX, float startY, float startVx, float startVy,
                           float dx, float dy, float speed, float accel, float drag) {
+        if (!fPhysics) {
+            // build 7 поведение: vel = (dx,dy) мгновенно, прямолинейная экстраполяция
+            float px = startX, py = startY;
+            simX[0] = px; simY[0] = py;
+            for (int t = 1; t <= H; t++) {
+                px += dx;
+                py += dy;
+                simX[t] = px;
+                simY[t] = py;
+            }
+            retVel.set(dx, dy);
+            return retVel;
+        }
         float len = Mathf.sqrt(dx*dx + dy*dy);
         float ndx = (len > 1e-4f) ? dx / len : 0f;
         float ndy = (len > 1e-4f) ? dy / len : 0f;
@@ -291,9 +314,14 @@ public final class BulletDodger {
         float total = 0;
         for (int i = 0; i < nearby.size; i++) {
             Bullet b = nearby.get(i);
-            float remain = b.type.lifetime - b.time - bulletTimeOffset;
-            int   maxT = (int) Math.min(H, Math.max(0, remain));
-            if (maxT <= 0) continue;
+            int maxT;
+            if (fLifetime) {
+                float remain = b.type.lifetime - b.time - bulletTimeOffset;
+                maxT = (int) Math.min(H, Math.max(0, remain));
+                if (maxT <= 0) continue;
+            } else {
+                maxT = H;
+            }
             float minD2 = Float.POSITIVE_INFINITY;
             int   minT  = 0;
             for (int t = 0; t <= maxT; t++) {
@@ -307,7 +335,7 @@ public final class BulletDodger {
             }
             if (minD2 >= SAFE_R*SAFE_R) continue;
             float dCPA = Mathf.sqrt(minD2);
-            float wDam = Mathf.clamp(b.damage / 15f, 0.5f, 5f);
+            float wDam = fDamageWeight ? Mathf.clamp(b.damage / 15f, 0.5f, 5f) : 1f;
             total += (SAFE_R - dCPA) * (REACT_HORIZON - minT) / REACT_HORIZON * wDam;
         }
         return total;
@@ -317,9 +345,14 @@ public final class BulletDodger {
         int n = 0;
         for (int i = 0; i < nearby.size; i++) {
             Bullet b = nearby.get(i);
-            float remain = b.type.lifetime - b.time - bulletTimeOffset;
-            int   maxT = (int) Math.min(H, Math.max(0, remain));
-            if (maxT <= 0) continue;
+            int maxT;
+            if (fLifetime) {
+                float remain = b.type.lifetime - b.time - bulletTimeOffset;
+                maxT = (int) Math.min(H, Math.max(0, remain));
+                if (maxT <= 0) continue;
+            } else {
+                maxT = H;
+            }
             float minD2 = Float.POSITIVE_INFINITY;
             for (int t = 0; t <= maxT; t++) {
                 float bt = bulletTimeOffset + t;

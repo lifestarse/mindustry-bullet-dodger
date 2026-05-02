@@ -1,4 +1,4 @@
-// Build: 11
+// Build: 12
 package dodger;
 
 import arc.Core;
@@ -48,9 +48,13 @@ public final class PivotPlanner {
     public Vec2  currentPivot;
     public float currentScore = 0f;
 
+    /** Текущая настройка density cap (читается на replan). */
+    private boolean fDensityCap = true;
+
     public boolean replan(float ux, float uy, Team playerTeam) {
-        // обновляем мин. дистанцию из настроек
+        // обновляем настройки
         minDist = Math.max(20f, Math.min(120f, Core.settings.getInt("dodger.minDist", DEFAULT_MIN_DIST)));
+        fDensityCap = Core.settings.getBool("dodger.densityCap", true);
         bait.clear();
         death.clear();
 
@@ -175,7 +179,7 @@ public final class PivotPlanner {
             if (d2 < DENSITY_RADIUS*DENSITY_RADIUS) density++;
         }
         // штраф за слишком плотный огонь: больше DENSITY_SOFT_CAP "близких" — линейный спад
-        if (density > DENSITY_SOFT_CAP) {
+        if (fDensityCap && density > DENSITY_SOFT_CAP) {
             float factor = Math.max(0f, 1f - (density - DENSITY_SOFT_CAP) * 0.3f);
             total *= factor;
         }
