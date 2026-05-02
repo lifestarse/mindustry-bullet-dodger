@@ -1,6 +1,7 @@
-// Build: 8
+// Build: 11
 package dodger;
 
+import arc.Core;
 import arc.math.Mathf;
 import arc.math.geom.Vec2;
 import arc.struct.Seq;
@@ -15,12 +16,12 @@ import mindustry.world.blocks.defense.turrets.Turret;
  * Score(p) — float:
  *   для каждой baitable t, чей safe annulus накрывает p:
  *     contribution = 1 + closeness, где closeness ∈ [0..1]
- *       1 = на MIN_PIVOT_DIST (максимально близко безопасно к стволу)
+ *       1 = на minDist (максимально близко безопасно к стволу)
  *       0 = на (range - ORBIT_R) (далеко, край радиуса)
  *   итого: каждая турель даёт 1..2, мотивируя залетать ближе.
  *
  * Кандидаты:
- *   (a) "inner ring": 8 точек на (MIN_PIVOT_DIST + 6) от каждой турели — агрессивно
+ *   (a) "inner ring": 8 точек на (minDist + 6) от каждой турели — агрессивно
  *   (b) "mid ring":   8 точек на середине annulus
  *   (c) попарные пересечения safe-disk границ
  *
@@ -28,11 +29,13 @@ import mindustry.world.blocks.defense.turrets.Turret;
  */
 public final class PivotPlanner {
 
-    public static final float ORBIT_R         = 24f;
-    public static final float MIN_PIVOT_DIST  = 50f;
-    public static final float SCAN_R          = 600f;
-    public static final float HYSTERESIS      = 1.15f;
-    public static final float INNER_OFFSET    = 6f;
+    public static final float ORBIT_R              = 24f;
+    public static final float SCAN_R               = 600f;
+    public static final float HYSTERESIS           = 1.15f;
+    public static final float INNER_OFFSET         = 6f;
+    public static final int   DEFAULT_MIN_DIST     = 50;
+    /** Текущая мин. дистанция pivot↔turret. Читается из Settings ("dodger.minDist"). */
+    private float minDist = DEFAULT_MIN_DIST;
 
     /** Сверху сколько турелей считаем "близко" — больше => плотный огонь. */
     private static final float DENSITY_RADIUS = 80f;
@@ -46,6 +49,8 @@ public final class PivotPlanner {
     public float currentScore = 0f;
 
     public boolean replan(float ux, float uy, Team playerTeam) {
+        // обновляем мин. дистанцию из настроек
+        minDist = Math.max(20f, Math.min(120f, Core.settings.getInt("dodger.minDist", DEFAULT_MIN_DIST)));
         bait.clear();
         death.clear();
 
@@ -72,8 +77,8 @@ public final class PivotPlanner {
         // (a) inner ring — агрессивные точки рядом со стволом
         for (Turret.TurretBuild t : bait) {
             float rMax = ((Turret) t.block).range - ORBIT_R;
-            if (rMax <= MIN_PIVOT_DIST) continue;
-            float r = MIN_PIVOT_DIST + INNER_OFFSET;
+            if (rMax <= minDist) continue;
+            float r = minDist + INNER_OFFSET;
             for (int k = 0; k < 8; k++) {
                 float a = k * Mathf.PI / 4f;
                 float px = t.x + Mathf.cos(a) * r;
@@ -87,8 +92,8 @@ public final class PivotPlanner {
         // (b) mid ring — компромиссные точки
         for (Turret.TurretBuild t : bait) {
             float rMax = ((Turret) t.block).range - ORBIT_R;
-            if (rMax <= MIN_PIVOT_DIST) continue;
-            float r = (MIN_PIVOT_DIST + rMax) * 0.5f;
+            if (rMax <= minDist) continue;
+            float r = (minDist + rMax) * 0.5f;
             for (int k = 0; k < 8; k++) {
                 float a = k * Mathf.PI / 4f;
                 float px = t.x + Mathf.cos(a) * r;
@@ -163,9 +168,9 @@ public final class PivotPlanner {
             float d2 = dx*dx + dy*dy;
             float rMax = ((Turret) t.block).range - ORBIT_R;
             if (d2 > rMax*rMax) continue;
-            if (d2 < MIN_PIVOT_DIST*MIN_PIVOT_DIST) return -1f;
+            if (d2 < minDist*minDist) return -1f;
             float d = Mathf.sqrt(d2);
-            float closeness = 1f - (d - MIN_PIVOT_DIST) / (rMax - MIN_PIVOT_DIST);
+            float closeness = 1f - (d - minDist) / (rMax - minDist);
             total += 1f + closeness;
             if (d2 < DENSITY_RADIUS*DENSITY_RADIUS) density++;
         }

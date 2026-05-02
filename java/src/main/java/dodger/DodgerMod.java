@@ -63,6 +63,10 @@ public class DodgerMod extends Mod {
                 v -> v + " step" + (v == 1 ? "" : "s"));
             t.sliderPref("dodger.beamWidth", BulletDodger.DEFAULT_BEAM_WIDTH,  1,  16,  1,
                 v -> "beam " + v);
+            // ебанутость: минимальная безопасная дистанция от pivot до турели.
+            // 20 px — суицид (3 тайла, борода с турелью), 120 — безопаснее (15 тайлов).
+            t.sliderPref("dodger.minDist", PivotPlanner.DEFAULT_MIN_DIST,    20, 120,  5,
+                v -> v + " px (lower = aggressiver)");
         });
 
         Events.on(EventType.BlockBuildEndEvent.class, e -> {
