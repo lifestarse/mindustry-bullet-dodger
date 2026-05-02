@@ -1,4 +1,4 @@
-// Build: 14
+// Build: 15
 package dodger;
 
 import arc.Core;
@@ -79,6 +79,10 @@ public class DodgerMod extends Mod {
             t.checkPref("dodger.densityCap",   true);  // build 8: штраф pivot-score за плотность турелей
             t.checkPref("dodger.homingSim",    true);  // build 14: итеративная симуляция homing-пуль
             t.checkPref("dodger.subtick",      true);  // build 14: sub-tick CPA через параболу
+            // ping compensation: сдвигает положение пуль вперёд на RTT.
+            t.checkPref("dodger.pingAuto", true);  // если в multiplayer — берём пинг из netClient
+            t.sliderPref("dodger.pingMs", 0, 0, 500, 10,
+                v -> v == 0 ? "off" : v + " ms (manual)");
         });
 
         Events.on(EventType.BlockBuildEndEvent.class, e -> {

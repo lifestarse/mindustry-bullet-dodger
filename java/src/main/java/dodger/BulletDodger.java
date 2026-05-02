@@ -1,4 +1,4 @@
-// Build: 14
+// Build: 15
 package dodger;
 
 import arc.Core;
@@ -60,6 +60,8 @@ public final class BulletDodger {
 
     /** Радиус юнита (hitSize/2). Кэшируется в начале compute. */
     private float unitR;
+    /** Компенсация пинга (тики), сдвигает положение пуль вперёд. */
+    private float pingTicks;
 
     private final Seq<Bullet> nearby = new Seq<>(64);
     private final Vec2  evade  = new Vec2();
@@ -133,6 +135,18 @@ public final class BulletDodger {
         fHoming       = Core.settings.getBool("dodger.homingSim",    true);
         fSubtick      = Core.settings.getBool("dodger.subtick",      true);
         unitR = unit.type.hitSize * 0.5f;
+
+        // ping compensation: bullets are shifted forward by RTT, so my command applies on a state
+        // ping ticks "future" relative to client view.
+        boolean autoPing = Core.settings.getBool("dodger.pingAuto", true);
+        int   pingMs;
+        if (autoPing && mindustry.Vars.netClient != null && mindustry.Vars.net.client()) {
+            pingMs = mindustry.Vars.netClient.getPing();
+        } else {
+            pingMs = Core.settings.getInt("dodger.pingMs", 0);
+        }
+        // 1 tick = 16.667ms, max 30 ticks = 500ms
+        pingTicks = Math.min(30f, Math.max(0f, pingMs / 16.667f));
         fLifetime     = Core.settings.getBool("dodger.lifetime",     true);
         fHysteresis   = Core.settings.getBool("dodger.hysteresis",   true);
         fDamageWeight = Core.settings.getBool("dodger.damageWeight", true);
@@ -328,7 +342,7 @@ public final class BulletDodger {
             Bullet b = nearby.get(i);
             int maxT;
             if (fLifetime) {
-                float remain = b.type.lifetime - b.time - bulletTimeOffset;
+                float remain = b.type.lifetime - b.time - bulletTimeOffset - pingTicks;
                 maxT = (int) Math.min(H, Math.max(0, remain));
                 if (maxT <= 0) continue;
             } else {
@@ -369,9 +383,11 @@ public final class BulletDodger {
         float minD2 = Float.POSITIVE_INFINITY;
         float minTf = 0f;
         float bvx = b.vel.x, bvy = b.vel.y;
+        // bullet position shifted forward by ping для серверной актуальности
+        float effectiveOffset = bulletTimeOffset + pingTicks;
         for (int t = 0; t < maxT; t++) {
-            float bxA = b.x + bvx * (bulletTimeOffset + t);
-            float byA = b.y + bvy * (bulletTimeOffset + t);
+            float bxA = b.x + bvx * (effectiveOffset + t);
+            float byA = b.y + bvy * (effectiveOffset + t);
             float bxB = bxA + bvx;
             float byB = byA + bvy;
             float sxA = simX[t],   syA = simY[t];
@@ -398,8 +414,8 @@ public final class BulletDodger {
             }
         }
         // плюс последняя точка t=maxT
-        float bxL = b.x + bvx * (bulletTimeOffset + maxT);
-        float byL = b.y + bvy * (bulletTimeOffset + maxT);
+        float bxL = b.x + bvx * (effectiveOffset + maxT);
+        float byL = b.y + bvy * (effectiveOffset + maxT);
         float dx = bxL - simX[maxT], dy = byL - simY[maxT];
         float d2 = dx*dx + dy*dy;
         if (d2 < minD2) { minD2 = d2; minTf = maxT; }
@@ -411,7 +427,9 @@ public final class BulletDodger {
      * Mindustry: vel.setAngle(moveToward(currentAngle, targetAngle, homingPower * 50)) — градусы за тик.
      */
     private long simHoming(Bullet b, int maxT, float thr2) {
-        float bx = b.x, by = b.y;
+        // start bullet shifted by pingTicks (linear) для server-side актуальности
+        float bx = b.x + b.vel.x * pingTicks;
+        float by = b.y + b.vel.y * pingTicks;
         float bvx = b.vel.x, bvy = b.vel.y;
         float homingRange = b.type.homingRange;
         float maxTurnDeg  = b.type.homingPower * 50f;
@@ -451,7 +469,7 @@ public final class BulletDodger {
             Bullet b = nearby.get(i);
             int maxT;
             if (fLifetime) {
-                float remain = b.type.lifetime - b.time - bulletTimeOffset;
+                float remain = b.type.lifetime - b.time - bulletTimeOffset - pingTicks;
                 maxT = (int) Math.min(H, Math.max(0, remain));
                 if (maxT <= 0) continue;
             } else {
@@ -461,9 +479,10 @@ public final class BulletDodger {
             if (bulletR < 1f) bulletR = 4f;
             float thr = unitR + bulletR + SAFETY_MARGIN;
             float thr2 = thr * thr;
+            float effectiveOffset = bulletTimeOffset + pingTicks;
             float minD2 = Float.POSITIVE_INFINITY;
             for (int t = 0; t <= maxT; t++) {
-                float bt = bulletTimeOffset + t;
+                float bt = effectiveOffset + t;
                 float bx = b.x + b.vel.x * bt;
                 float by = b.y + b.vel.y * bt;
                 float dx = bx - simX[t];
