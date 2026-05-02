@@ -272,8 +272,8 @@ public class DodgerMod extends Mod {
                 Vars.player.mouseY = target.y;
                 Vars.player.shooting = true;
                 unit.aim(target.x, target.y);
-                unit.rotation = arc.math.Mathf.atan2(target.y - unit.y, target.x - unit.x)
-                                * arc.math.Mathf.radDeg;
+                // unit.angleTo использует Mindustry-конвенцию (0=север), а не math (0=восток).
+                unit.rotation = unit.angleTo(target.x, target.y);
                 try {
                     for (var mount : unit.mounts) {
                         mount.shoot = true;

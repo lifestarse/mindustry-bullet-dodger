@@ -39,7 +39,7 @@ public final class HuntController extends AIController {
             float tx = target.getX();
             float ty = target.getY();
             unit.aim(tx, ty);
-            unit.rotation = Mathf.atan2(ty - unit.y, tx - unit.x) * Mathf.radDeg;
+            unit.rotation = unit.angleTo(tx, ty);
         }
     }
 
