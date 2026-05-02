@@ -142,15 +142,20 @@ public class DodgerMod extends Mod {
      */
     private void populateZones(Unit unit) {
         dodger.clearZones();
+        dodger.clearEdges();
         final float buffer = unit.type.hitSize * 0.5f + 4f;
         // турели
         for (Teams.TeamData td : Vars.state.teams.getActive()) {
             if (td.team == unit.team) continue;
             Vars.indexer.eachBlock(td.team, unit.x, unit.y, PivotPlanner.SCAN_R, b -> true, b -> {
                 if (!(b instanceof Turret.TurretBuild tb)) return;
-                if (TurretCatalog.classify(b.block) == TurretCatalog.Kind.DEATH) {
+                TurretCatalog.Kind k = TurretCatalog.classify(b.block);
+                if (k == TurretCatalog.Kind.DEATH) {
                     float r = ((Turret) b.block).range + buffer;
                     dodger.addZone(b.x, b.y, r);
+                } else if (k == TurretCatalog.Kind.BAITABLE) {
+                    // edge band вокруг радиуса: drone не должен качаться на пределе
+                    dodger.addEdge(b.x, b.y, ((Turret) b.block).range);
                 }
             });
         }

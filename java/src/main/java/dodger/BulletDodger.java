@@ -74,6 +74,13 @@ public final class BulletDodger {
     /** Штраф за каждый тик трактории, проведённый в death-zone. */
     private static final float ZONE_PENALTY_PER_TICK = 50f;
 
+    /** Soft zones — края радиусов баит-турелей. [x0,y0,range0, x1,y1,range1, ...]. */
+    private float[] edges = new float[120];
+    private int     edgeCount = 0;
+    /** Полуширина edge band: tick рядом с линией range = penalty. */
+    private static final float EDGE_BAND = 20f;
+    private static final float EDGE_PENALTY_PER_TICK = 1f;
+
     public void clearZones() { zoneCount = 0; }
     public int  getZoneCount() { return zoneCount; }
     public void addZone(float x, float y, float radius) {
@@ -87,6 +94,43 @@ public final class BulletDodger {
         zones[i + 1] = y;
         zones[i + 2] = radius * radius;
         zoneCount++;
+    }
+
+    public void clearEdges() { edgeCount = 0; }
+    public void addEdge(float x, float y, float range) {
+        int i = edgeCount * 3;
+        if (i + 3 > edges.length) {
+            float[] n = new float[edges.length * 2];
+            System.arraycopy(edges, 0, n, 0, edges.length);
+            edges = n;
+        }
+        edges[i]     = x;
+        edges[i + 1] = y;
+        edges[i + 2] = range;
+        edgeCount++;
+    }
+
+    /** Штраф за нахождение трактории в edge-band'е баит-турелей.
+     *  Edge band: |dist_to_turret - range| < EDGE_BAND. Это "качельная зона",
+     *  где турель то стреляет то нет, ловит дрон на повторный заход. */
+    private float edgePenalty() {
+        if (edgeCount == 0) return 0f;
+        float total = 0;
+        for (int t = 0; t <= H; t++) {
+            float sx = simX[t], sy = simY[t];
+            for (int i = 0; i < edgeCount; i++) {
+                int idx = i * 3;
+                float dx = sx - edges[idx];
+                float dy = sy - edges[idx + 1];
+                float d = Mathf.sqrt(dx*dx + dy*dy);
+                float diff = Math.abs(d - edges[idx + 2]);
+                if (diff < EDGE_BAND) {
+                    total += EDGE_PENALTY_PER_TICK * (1f - diff / EDGE_BAND);
+                    break;
+                }
+            }
+        }
+        return total;
     }
 
     /** Сумма штрафов за нахождение трактории в death-zone'ах. */
@@ -234,7 +278,7 @@ public final class BulletDodger {
 
         // baseline
         Vec2 endVel = simulate(ux, uy, uvx, uvy, 0f, 0f, speed, accel, drag);
-        float dangerStill = scoreSim(0f) + zonesPenalty();
+        float dangerStill = scoreSim(0f) + zonesPenalty() + edgePenalty();
         // если ни пуль не угрожают, ни в зоне не сидим — выходим, GOTO рулит
         if (dangerStill <= 1e-3f) return evade;
 
@@ -250,7 +294,7 @@ public final class BulletDodger {
             float dx = Mathf.cos(a) * speed;
             float dy = Mathf.sin(a) * speed;
             endVel = simulate(ux, uy, uvx, uvy, dx, dy, speed, accel, drag);
-            float danger = scoreSim(0f) + zonesPenalty();
+            float danger = scoreSim(0f) + zonesPenalty() + edgePenalty();
             float fx = simX[H], fy = simY[H];
             float bias = pivotBias(fx, fy, pivot);
             float cont = fHysteresis ? -((dx*prevDx + dy*prevDy) / (speed*speed)) * HYST_WEIGHT : 0f;
@@ -295,7 +339,7 @@ public final class BulletDodger {
         // baseline продолжения: ничего не делать
         Vec2 endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
                                0f, 0f, speed, accel, drag);
-        float baseDanger = scoreSim(bulletOffset) + zonesPenalty();
+        float baseDanger = scoreSim(bulletOffset) + zonesPenalty() + edgePenalty();
         float baseBias = pivotBias(simX[H], simY[H], pivot);
         insertBeam(childBeam, beam, parent.score + baseDanger + baseBias, 0f, 0f,
                    simX[H], simY[H], endVel.x, endVel.y, parentIdx);
@@ -306,7 +350,7 @@ public final class BulletDodger {
             float dy = Mathf.sin(a) * speed;
             endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
                               dx, dy, speed, accel, drag);
-            float danger = scoreSim(bulletOffset) + zonesPenalty();
+            float danger = scoreSim(bulletOffset) + zonesPenalty() + edgePenalty();
             float bias = pivotBias(simX[H], simY[H], pivot);
             float cont = fHysteresis ? -((dx*parent.dx + dy*parent.dy) / (speed*speed)) * HYST_WEIGHT * 0.3f : 0f;
             float motion = fPreferMotion
