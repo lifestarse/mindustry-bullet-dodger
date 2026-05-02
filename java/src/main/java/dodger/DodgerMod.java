@@ -219,8 +219,6 @@ public class DodgerMod extends Mod {
                 } else {
                     unit.vel.set(evade);
                 }
-                // body face evade direction — без этого strafePenalty режет реальную скорость
-                unit.rotation = arc.math.Mathf.atan2(evade.y, evade.x) * arc.math.Mathf.radDeg;
                 lastWasEvade = true;
                 lastFinal.set(evade);
             } else {
@@ -351,10 +349,6 @@ public class DodgerMod extends Mod {
             catch (Throwable t) { unit.vel.set(finalMove); }
         } else {
             unit.vel.set(finalMove);
-        }
-        // body face direction of travel — нивелируется strafePenalty, дрон полной скоростью
-        if (finalMove.len2() > 0.5f) {
-            unit.rotation = arc.math.Mathf.atan2(finalMove.y, finalMove.x) * arc.math.Mathf.radDeg;
         }
 
         // диагностика
