@@ -533,7 +533,16 @@ public final class BulletDodger {
             if (minD2 < thr2) {
                 float dCPA = Mathf.sqrt(minD2);
                 float wDam = fDamageWeight ? Mathf.clamp(b.damage / 15f, 0.5f, 5f) : 1f;
+                // soft penalty за приближение (proximity gradient)
                 total += (thr - dCPA) * (REACT_HORIZON - minTf) / REACT_HORIZON * wDam;
+                // ДИСКРЕТНЫЙ штраф за реальный hit (dCPA внутри unitR+bulletR без safetyMargin):
+                // на порядки больше любых soft preferences (pivot bias, motion, hysteresis),
+                // чтобы beam search никогда не выбирал траекторию с фактическим попаданием
+                // ради близости к pivot или гладкости движения.
+                float realHitR = unitR + bulletR;
+                if (dCPA < realHitR) {
+                    total += 1000f * wDam;
+                }
             }
 
             // Frag/lightning danger: при despawn пуля разлетается на осколки или метает молнии.
