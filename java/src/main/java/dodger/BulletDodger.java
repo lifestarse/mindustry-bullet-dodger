@@ -223,7 +223,10 @@ public final class BulletDodger {
         // physics OFF по умолчанию: мы пишем unit.vel.set, скорость меняется мгновенно.
         // Включать имеет смысл только если переключаешься на movePref-управление.
         fPhysics      = Core.settings.getBool("dodger.physics",      false);
-        fHoming       = Core.settings.getBool("dodger.homingSim",    true);
+        // homingSim default OFF: либо имплементация неточна (homing target acquisition в Mindustry
+        // сложнее чем "find closest in homingRange"), либо trig-функции жрут frame budget.
+        // Включай только если уверен что нужно. На медленных пулях линейная аппроксимация работает лучше.
+        fHoming       = Core.settings.getBool("dodger.homingSim",    false);
         fSubtick      = Core.settings.getBool("dodger.subtick",      true);
         fPreferMotion = Core.settings.getBool("dodger.preferMotion", true);
         fEdgeMul = Math.max(0f, Math.min(2f, Core.settings.getInt("dodger.edgePenalty", 100) / 100f));

@@ -86,7 +86,7 @@ public class DodgerMod extends Mod {
             t.checkPref("dodger.hysteresis",   true);  // build 8: continuity бонус
             t.checkPref("dodger.damageWeight", true);  // build 8: вес угрозы по урону пули
             t.checkPref("dodger.densityCap",   true);  // build 8: штраф pivot-score за плотность турелей
-            t.checkPref("dodger.homingSim",    true);  // build 14: итеративная симуляция homing-пуль
+            t.checkPref("dodger.homingSim",    false); // build 14: итеративная симуляция homing-пуль (опт-ин, пока нестабильно)
             t.checkPref("dodger.subtick",      true);  // build 14: sub-tick CPA через параболу
             t.checkPref("dodger.preferMotion", true);  // build 17: бонус за продолжение текущего вектора движения
             t.checkPref("dodger.drift",        false); // build 18: Lissajous-дрейф pivot'а; OFF = статика
