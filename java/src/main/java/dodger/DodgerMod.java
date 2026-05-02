@@ -42,10 +42,6 @@ public class DodgerMod extends Mod {
     private final PivotPlanner    planner = new PivotPlanner();
     private final OrbitController orbiter = new OrbitController();
     private final BulletDodger    dodger  = new BulletDodger();
-    private final HuntController  hunter  = new HuntController();
-    /** Original controller (Player obj), кэшируем для restore. */
-    private mindustry.entities.units.UnitController originalController = null;
-    private boolean huntActive = false;
 
     private boolean replanPending = true;
     private int     ticksSinceReplan = 0;
@@ -241,15 +237,10 @@ public class DodgerMod extends Mod {
             return;
         }
 
-        // HUNT MODE: подключаем кастомный controller для полного перехвата управления.
+        // HUNT MODE: преследуем цель и стреляем по ней, доджим параллельно.
+        // Player остаётся controller'ом (не меняем — иначе respawn loop), всё через
+        // прямые перезаписи unit/Player полей в Trigger.update.
         if (isHunt()) {
-            // Activate: подменяем unit.controller на наш HuntController.
-            if (!huntActive || unit.controller() != hunter) {
-                originalController = unit.controller();
-                unit.controller(hunter);
-                huntActive = true;
-            }
-
             Unit target = findHuntTarget(unit);
             populateZones(unit);
             Vec2 evade = dodger.compute(unit, target == null ? null : new Vec2(target.x, target.y));
@@ -273,11 +264,27 @@ public class DodgerMod extends Mod {
                 lastWasEvade = false;
             }
             lastFinal.set(finalMove);
+            unit.vel.set(finalMove);
 
-            // отдаём данные в HuntController — он применит их в своём updateUnit() на след. тике
-            hunter.setTarget(target);
-            hunter.setMove(finalMove);
-            hunter.setShooting(target != null);
+            // прицеливание + стрельба
+            if (target != null) {
+                Vars.player.mouseX = target.x;
+                Vars.player.mouseY = target.y;
+                Vars.player.shooting = true;
+                unit.aim(target.x, target.y);
+                unit.rotation = arc.math.Mathf.atan2(target.y - unit.y, target.x - unit.x)
+                                * arc.math.Mathf.radDeg;
+                try {
+                    for (var mount : unit.mounts) {
+                        mount.shoot = true;
+                        mount.rotate = true;
+                        mount.aimX = target.x;
+                        mount.aimY = target.y;
+                    }
+                } catch (Throwable t) { }
+            } else {
+                Vars.player.shooting = false;
+            }
 
             if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
                 Log.info(String.format(
@@ -289,13 +296,6 @@ public class DodgerMod extends Mod {
                 ticksSinceLog = 0;
             }
             return;
-        } else if (huntActive) {
-            // Deactivate: вернуть оригинального controller (Player).
-            if (originalController != null && unit.controller() == hunter) {
-                unit.controller(originalController);
-            }
-            huntActive = false;
-            originalController = null;
         }
 
         ticksSinceReplan++;
