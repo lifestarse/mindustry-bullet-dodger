@@ -79,7 +79,9 @@ public final class BulletDodger {
     private int     edgeCount = 0;
     /** Полуширина edge band: tick рядом с линией range = penalty. */
     private static final float EDGE_BAND = 20f;
-    private static final float EDGE_PENALTY_PER_TICK = 1f;
+    private static final float EDGE_PENALTY_BASE = 1f;
+    /** Множитель edge penalty (читается из Settings, 0 = выключено). */
+    private float fEdgeMul = 1f;
 
     public void clearZones() { zoneCount = 0; }
     public int  getZoneCount() { return zoneCount; }
@@ -114,7 +116,7 @@ public final class BulletDodger {
      *  Edge band: |dist_to_turret - range| < EDGE_BAND. Это "качельная зона",
      *  где турель то стреляет то нет, ловит дрон на повторный заход. */
     private float edgePenalty() {
-        if (edgeCount == 0) return 0f;
+        if (edgeCount == 0 || fEdgeMul <= 1e-3f) return 0f;
         float total = 0;
         for (int t = 0; t <= H; t++) {
             float sx = simX[t], sy = simY[t];
@@ -125,7 +127,7 @@ public final class BulletDodger {
                 float d = Mathf.sqrt(dx*dx + dy*dy);
                 float diff = Math.abs(d - edges[idx + 2]);
                 if (diff < EDGE_BAND) {
-                    total += EDGE_PENALTY_PER_TICK * (1f - diff / EDGE_BAND);
+                    total += EDGE_PENALTY_BASE * fEdgeMul * (1f - diff / EDGE_BAND);
                     break;
                 }
             }
@@ -224,6 +226,7 @@ public final class BulletDodger {
         fHoming       = Core.settings.getBool("dodger.homingSim",    true);
         fSubtick      = Core.settings.getBool("dodger.subtick",      true);
         fPreferMotion = Core.settings.getBool("dodger.preferMotion", true);
+        fEdgeMul = Math.max(0f, Math.min(2f, Core.settings.getInt("dodger.edgePenalty", 100) / 100f));
         unitR = unit.type.hitSize * 0.5f;
 
         // нормализуем текущее движение юнита для motion-continuity бонуса.

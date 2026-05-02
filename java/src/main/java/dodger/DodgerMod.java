@@ -76,6 +76,9 @@ public class DodgerMod extends Mod {
             // aggression: % бонуса за близость к стволу. 100 = дефолт, 0 = безразлично к близости.
             t.sliderPref("dodger.aggression", 100, 0, 200, 10,
                 v -> v + "% closeness reward");
+            // edge penalty: штраф за качание на пределе радиуса. 0 = выкл, 100 = дефолт.
+            t.sliderPref("dodger.edgePenalty", 100, 0, 200, 10,
+                v -> v == 0 ? "off" : v + "% edge band");
             // тумблеры post-7 фич — выключаем по одному для диагностики
             // physics: ВЫКЛ по умолчанию, т.к. vel.set игнорит accel. Включать только с movePref.
             t.checkPref("dodger.physics",      false); // build 8: физическая симуляция accel/drag
