@@ -6,4 +6,8 @@ version: "1.0"
 minGameVersion: "154"
 main: "dodger.DodgerMod"
 java: true
-hidden: false
+# hidden=true помечает мод как multiplayer-compatible:
+# Mindustry исключает его из mod-hash проверки серверов и показывает зелёную плашку
+# "Доступна в игре по сети". Никакого контента (блоков/юнитов) мод не добавляет,
+# так что серверу его наличие у клиента безразлично.
+hidden: true
