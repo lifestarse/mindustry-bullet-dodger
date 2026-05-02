@@ -1,4 +1,4 @@
-// Build: 15
+// Build: 16
 package dodger;
 
 import arc.Core;
@@ -12,8 +12,11 @@ import arc.math.geom.Vec2;
 import arc.util.Log;
 import mindustry.Vars;
 import mindustry.game.EventType;
+import mindustry.game.Teams;
+import mindustry.gen.Groups;
 import mindustry.gen.Unit;
 import mindustry.mod.Mod;
+import mindustry.world.blocks.defense.turrets.Turret;
 
 /**
  * Диагностический build.
@@ -117,6 +120,38 @@ public class DodgerMod extends Mod {
     private boolean isPassive()        { return Core.settings.getBool(KEY_PASSIVE, false); }
     private void    setEnabled(boolean v) { Core.settings.put(KEY_ENABLED, v); }
 
+    /**
+     * Заполняет dodger.zones списком no-dodge зон вокруг юнита:
+     *   - DEATH-турели по их range (+ запас на хитбокс)
+     *   - вражеские NO_DODGE юниты по их max weapon range
+     */
+    private void populateZones(Unit unit) {
+        dodger.clearZones();
+        final float buffer = unit.type.hitSize * 0.5f + 4f;
+        // турели
+        for (Teams.TeamData td : Vars.state.teams.getActive()) {
+            if (td.team == unit.team) continue;
+            Vars.indexer.eachBlock(td.team, unit.x, unit.y, PivotPlanner.SCAN_R, b -> true, b -> {
+                if (!(b instanceof Turret.TurretBuild tb)) return;
+                if (TurretCatalog.classify(b.block) == TurretCatalog.Kind.DEATH) {
+                    float r = ((Turret) b.block).range + buffer;
+                    dodger.addZone(b.x, b.y, r);
+                }
+            });
+        }
+        // юниты с не-доджибельным оружием
+        Groups.unit.each(u -> {
+            if (u == null || u.dead) return;
+            if (u.team == unit.team) return;
+            float dx = u.x - unit.x, dy = u.y - unit.y;
+            float scan = PivotPlanner.SCAN_R;
+            if (dx*dx + dy*dy > scan*scan) return;
+            if (UnitCatalog.isNoDodge(u.type)) {
+                dodger.addZone(u.x, u.y, u.range() + buffer);
+            }
+        });
+    }
+
     private void tick() {
         if (Core.input.ctrl() && Core.input.shift() && Core.input.keyTap(KeyCode.b)) {
             boolean now = !isEnabled();
@@ -133,6 +168,7 @@ public class DodgerMod extends Mod {
         // PASSIVE MODE: мод не баитит, ничего не строит, просто перехватывает движение
         // когда летят пули. В остальное время игрок управляет сам.
         if (isPassive()) {
+            populateZones(unit);
             Vec2 evade = dodger.compute(unit, null);  // null pivot = без bias
             if (evade.len2() > 0.01f) {
                 if (useMovePref()) {
@@ -180,6 +216,7 @@ public class DodgerMod extends Mod {
             planner.currentPivot.y + DRIFT_R * arc.math.Mathf.cos(driftPhase / DRIFT_PERIOD_Y)
         );
 
+        populateZones(unit);
         Vec2 evade = dodger.compute(unit, driftedPivot);
         Vec2 finalMove;
         if (evade.len2() > 0.01f) {

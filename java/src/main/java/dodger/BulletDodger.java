@@ -1,4 +1,4 @@
-// Build: 15
+// Build: 16
 package dodger;
 
 import arc.Core;
@@ -62,6 +62,46 @@ public final class BulletDodger {
     private float unitR;
     /** Компенсация пинга (тики), сдвигает положение пуль вперёд. */
     private float pingTicks;
+
+    /** Death zones (no-dodge weapon ranges). Plain float[]: [x0,y0,r2_0, x1,y1,r2_1, ...]. */
+    private float[] zones = new float[120];
+    private int     zoneCount = 0;
+    /** Штраф за каждый тик трактории, проведённый в death-zone. */
+    private static final float ZONE_PENALTY_PER_TICK = 50f;
+
+    public void clearZones() { zoneCount = 0; }
+    public int  getZoneCount() { return zoneCount; }
+    public void addZone(float x, float y, float radius) {
+        int i = zoneCount * 3;
+        if (i + 3 > zones.length) {
+            float[] n = new float[zones.length * 2];
+            System.arraycopy(zones, 0, n, 0, zones.length);
+            zones = n;
+        }
+        zones[i]     = x;
+        zones[i + 1] = y;
+        zones[i + 2] = radius * radius;
+        zoneCount++;
+    }
+
+    /** Сумма штрафов за нахождение трактории в death-zone'ах. */
+    private float zonesPenalty() {
+        if (zoneCount == 0) return 0f;
+        float total = 0;
+        for (int t = 0; t <= H; t++) {
+            float sx = simX[t], sy = simY[t];
+            for (int i = 0; i < zoneCount; i++) {
+                int idx = i * 3;
+                float dx = sx - zones[idx];
+                float dy = sy - zones[idx + 1];
+                if (dx*dx + dy*dy < zones[idx + 2]) {
+                    total += ZONE_PENALTY_PER_TICK;
+                    break;
+                }
+            }
+        }
+        return total;
+    }
 
     private final Seq<Bullet> nearby = new Seq<>(64);
     private final Vec2  evade  = new Vec2();
@@ -177,7 +217,8 @@ public final class BulletDodger {
 
         // baseline
         Vec2 endVel = simulate(ux, uy, uvx, uvy, 0f, 0f, speed, accel, drag);
-        float dangerStill = scoreSim(0f);
+        float dangerStill = scoreSim(0f) + zonesPenalty();
+        // если ни пуль не угрожают, ни в зоне не сидим — выходим, GOTO рулит
         if (dangerStill <= 1e-3f) return evade;
 
         float currentBias = pivotBias(ux, uy, pivot);
@@ -192,7 +233,7 @@ public final class BulletDodger {
             float dx = Mathf.cos(a) * speed;
             float dy = Mathf.sin(a) * speed;
             endVel = simulate(ux, uy, uvx, uvy, dx, dy, speed, accel, drag);
-            float danger = scoreSim(0f);
+            float danger = scoreSim(0f) + zonesPenalty();
             float fx = simX[H], fy = simY[H];
             float bias = pivotBias(fx, fy, pivot);
             float cont = fHysteresis ? -((dx*prevDx + dy*prevDy) / (speed*speed)) * HYST_WEIGHT : 0f;
@@ -234,7 +275,7 @@ public final class BulletDodger {
         // baseline продолжения: ничего не делать
         Vec2 endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
                                0f, 0f, speed, accel, drag);
-        float baseDanger = scoreSim(bulletOffset);
+        float baseDanger = scoreSim(bulletOffset) + zonesPenalty();
         float baseBias = pivotBias(simX[H], simY[H], pivot);
         insertBeam(childBeam, beam, parent.score + baseDanger + baseBias, 0f, 0f,
                    simX[H], simY[H], endVel.x, endVel.y, parentIdx);
@@ -245,7 +286,7 @@ public final class BulletDodger {
             float dy = Mathf.sin(a) * speed;
             endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
                               dx, dy, speed, accel, drag);
-            float danger = scoreSim(bulletOffset);
+            float danger = scoreSim(bulletOffset) + zonesPenalty();
             float bias = pivotBias(simX[H], simY[H], pivot);
             float cont = fHysteresis ? -((dx*parent.dx + dy*parent.dy) / (speed*speed)) * HYST_WEIGHT * 0.3f : 0f;
             insertBeam(childBeam, beam, parent.score + danger + bias + cont, dx, dy,
