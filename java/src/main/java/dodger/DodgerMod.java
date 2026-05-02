@@ -1,0 +1,189 @@
+// Build: 5
+package dodger;
+
+import arc.Core;
+import arc.Events;
+import arc.graphics.Color;
+import arc.graphics.g2d.Draw;
+import arc.graphics.g2d.Fill;
+import arc.graphics.g2d.Lines;
+import arc.input.KeyCode;
+import arc.math.geom.Vec2;
+import arc.util.Log;
+import mindustry.Vars;
+import mindustry.game.EventType;
+import mindustry.gen.Unit;
+import mindustry.mod.Mod;
+
+/**
+ * Диагностический build.
+ *
+ * Каждый тик:
+ *   - решаем, какой вектор движения хотим (evade или return-to-pivot)
+ *   - применяем его через unit.movePref(...) ИЛИ unit.vel.set(...) в зависимости от режима.
+ *     Сейчас по умолчанию — vel.set с принудительным вызовом каждый тик; movePref-режим
+ *     включается через настройку.
+ *   - раз в 60 тиков пишем в лог состояние: pivot, threats, evade, vel, pos, score
+ *   - на Trigger.draw (если ивент существует) рисуем pivot, орбитал-вектор, угрозы.
+ */
+public class DodgerMod extends Mod {
+
+    private static final String KEY_ENABLED   = "dodger.enabled";
+    private static final String KEY_MOVE_PREF = "dodger.movePref";
+    private static final int    REPLAN_FALLBACK_TICKS = 60;
+    private static final int    LOG_PERIOD_TICKS = 60;
+
+    private final PivotPlanner    planner = new PivotPlanner();
+    private final OrbitController orbiter = new OrbitController();
+    private final BulletDodger    dodger  = new BulletDodger();
+
+    private boolean replanPending = true;
+    private int     ticksSinceReplan = 0;
+    private int     ticksSinceLog = 0;
+
+    private final Vec2 lastFinal     = new Vec2();
+    private final Vec2 driftedPivot  = new Vec2();
+    private float      driftPhase    = 0f;
+    private boolean    lastWasEvade  = false;
+
+    // Lissajous: непериодичный по эффекту дрейф (периоды 30/45 не совпадают)
+    private static final float DRIFT_R         = 40f;
+    private static final float DRIFT_PERIOD_X  = 30f;
+    private static final float DRIFT_PERIOD_Y  = 45f;
+
+    @Override
+    public void init() {
+        Vars.ui.settings.addCategory("Dodger", t -> {
+            t.checkPref(KEY_ENABLED, false);
+            t.checkPref(KEY_MOVE_PREF, false);
+        });
+
+        Events.on(EventType.BlockBuildEndEvent.class, e -> {
+            if (e == null || e.tile == null) return;
+            if (Vars.player == null || Vars.player.unit() == null) return;
+            float dx = e.tile.worldx() - Vars.player.unit().x;
+            float dy = e.tile.worldy() - Vars.player.unit().y;
+            if (dx*dx + dy*dy > PivotPlanner.SCAN_R * PivotPlanner.SCAN_R) return;
+            replanPending = true;
+        });
+
+        Events.on(EventType.BlockDestroyEvent.class, e -> {
+            if (e == null || e.tile == null) return;
+            if (Vars.player == null || Vars.player.unit() == null) return;
+            float dx = e.tile.worldx() - Vars.player.unit().x;
+            float dy = e.tile.worldy() - Vars.player.unit().y;
+            if (dx*dx + dy*dy > PivotPlanner.SCAN_R * PivotPlanner.SCAN_R) return;
+            replanPending = true;
+        });
+
+        Events.run(EventType.Trigger.update, this::tick);
+        // визуальный оверлей
+        try {
+            Events.run(EventType.Trigger.draw, this::drawDebug);
+        } catch (Throwable t) {
+            Log.warn("[dodger] Trigger.draw недоступен: " + t.getMessage());
+        }
+    }
+
+    private boolean isEnabled()        { return Core.settings.getBool(KEY_ENABLED, false); }
+    private boolean useMovePref()      { return Core.settings.getBool(KEY_MOVE_PREF, false); }
+    private void    setEnabled(boolean v) { Core.settings.put(KEY_ENABLED, v); }
+
+    private void tick() {
+        if (Core.input.ctrl() && Core.input.shift() && Core.input.keyTap(KeyCode.b)) {
+            boolean now = !isEnabled();
+            setEnabled(now);
+            try { Vars.ui.hudfrag.showToast("[dodger] " + (now ? "ON" : "OFF")); }
+            catch (Throwable ignored) { Log.info("[dodger] " + (now ? "ON" : "OFF")); }
+        }
+
+        if (!isEnabled()) return;
+        if (Vars.player == null) return;
+        Unit unit = Vars.player.unit();
+        if (unit == null || unit.dead) return;
+
+        ticksSinceReplan++;
+        if (replanPending || ticksSinceReplan >= REPLAN_FALLBACK_TICKS) {
+            planner.replan(unit.x, unit.y, unit.team);
+            replanPending = false;
+            ticksSinceReplan = 0;
+        }
+
+        if (planner.currentPivot == null) {
+            if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
+                Log.info("[dodger] no pivot. enemy bullets nearby would be detected next time.");
+                ticksSinceLog = 0;
+            }
+            return;
+        }
+
+        // дрейфующая цель: pivot + Lissajous offset
+        driftPhase += 1f;
+        driftedPivot.set(
+            planner.currentPivot.x + DRIFT_R * arc.math.Mathf.sin(driftPhase / DRIFT_PERIOD_X),
+            planner.currentPivot.y + DRIFT_R * arc.math.Mathf.cos(driftPhase / DRIFT_PERIOD_Y)
+        );
+
+        Vec2 evade = dodger.compute(unit, driftedPivot);
+        Vec2 finalMove;
+        if (evade.len2() > 0.01f) {
+            finalMove = evade;
+            lastWasEvade = true;
+        } else {
+            finalMove = orbiter.step(unit, driftedPivot);
+            lastWasEvade = false;
+        }
+        lastFinal.set(finalMove);
+
+        // применение движения
+        if (useMovePref()) {
+            try { unit.movePref(finalMove); }
+            catch (Throwable t) { unit.vel.set(finalMove); }
+        } else {
+            unit.vel.set(finalMove);
+        }
+
+        // диагностика
+        if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
+            Vec2 p = planner.currentPivot;
+            Log.info(String.format(
+                "[dodger] pivot=(%.0f,%.0f) score=%.1f | scanned=%d enemy=%d hits-after-evade=%d danger=%.2f | mode=%s | move=(%.2f,%.2f) vel=(%.2f,%.2f) unit=(%.0f,%.0f)",
+                p.x, p.y, planner.currentScore,
+                dodger.bulletsScanned, dodger.enemyBullets, dodger.threatCount, dodger.bestDanger,
+                lastWasEvade ? "EVADE" : "GOTO",
+                finalMove.x, finalMove.y,
+                unit.vel.x, unit.vel.y,
+                unit.x, unit.y));
+            ticksSinceLog = 0;
+        }
+    }
+
+    private void drawDebug() {
+        if (!isEnabled()) return;
+        if (Vars.player == null || Vars.player.unit() == null) return;
+        if (planner.currentPivot == null) return;
+
+        Unit unit = Vars.player.unit();
+        Vec2 pivot = planner.currentPivot;
+
+        Draw.z(120f); // overlay above world
+
+        // ideal pivot — мелкий белый крест
+        Draw.color(Color.white);
+        Lines.stroke(1f);
+        Lines.line(pivot.x - 3, pivot.y, pivot.x + 3, pivot.y);
+        Lines.line(pivot.x, pivot.y - 3, pivot.x, pivot.y + 3);
+
+        // текущая цель (дрейфующая) — красный круг
+        Draw.color(Color.red);
+        Lines.stroke(2f);
+        Lines.circle(driftedPivot.x, driftedPivot.y, 6f);
+        Fill.circle(driftedPivot.x, driftedPivot.y, 2.5f);
+
+        // вектор движения от юнита
+        Draw.color(lastWasEvade ? Color.yellow : Color.green);
+        Lines.line(unit.x, unit.y, unit.x + lastFinal.x * 4f, unit.y + lastFinal.y * 4f);
+
+        Draw.reset();
+    }
+}

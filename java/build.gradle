@@ -1,0 +1,35 @@
+// Build: 1
+// Gradle build for Mindustry mod. Requires JDK 17.
+// Run:  gradlew jarAndroid     -> dist/Dodger.jar
+// Then copy dist/Dodger.jar to %AppData%\Mindustry\mods\
+
+plugins { id 'java' }
+
+sourceCompatibility = 17
+targetCompatibility = 17
+
+repositories {
+    mavenCentral()
+    maven { url 'https://www.jitpack.io' }
+}
+
+ext {
+    mindustryVersion = 'v146'
+    arcVersion       = 'v146'
+}
+
+dependencies {
+    compileOnly "com.github.Anuken.Arc:arc-core:$arcVersion"
+    compileOnly "com.github.Anuken.Mindustry:core:$mindustryVersion"
+}
+
+task jarAndroid(type: Jar) {
+    archiveFileName = "Dodger.jar"
+    destinationDirectory = file("dist")
+    from sourceSets.main.output
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : null }.findAll { it != null }
+    }
+    from('assets') { into 'assets' }
+    from('mod.hjson')
+}
