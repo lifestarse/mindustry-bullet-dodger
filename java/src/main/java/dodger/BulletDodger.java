@@ -1,4 +1,4 @@
-// Build: 16
+// Build: 17
 package dodger;
 
 import arc.Core;
@@ -35,6 +35,7 @@ public final class BulletDodger {
     private static final int   BEAM_MAX      = 16;
     private static final float PIVOT_BIAS    = 0.01f;
     private static final float HYST_WEIGHT   = 0.5f;
+    private static final float MOTION_WEIGHT = 0.4f; // бонус за продолжение текущего движения
     private static final float SAFETY_MARGIN = 2f;   // px поверх реальной hit-зоны
 
     /** Дефолты для settings, если ключи ещё не заданы. */
@@ -57,6 +58,10 @@ public final class BulletDodger {
     private boolean fDamageWeight;
     private boolean fHoming;     // итеративная симуляция homing-пуль (build 14)
     private boolean fSubtick;    // sub-tick точность через параболическую интерполяцию
+    private boolean fPreferMotion; // продолжать текущее направление движения (build 17)
+
+    /** Нормализованное направление текущего движения юнита (cached). */
+    private float motionNx, motionNy, motionFactor;
 
     /** Радиус юнита (hitSize/2). Кэшируется в начале compute. */
     private float unitR;
@@ -174,7 +179,19 @@ public final class BulletDodger {
         fPhysics      = Core.settings.getBool("dodger.physics",      false);
         fHoming       = Core.settings.getBool("dodger.homingSim",    true);
         fSubtick      = Core.settings.getBool("dodger.subtick",      true);
+        fPreferMotion = Core.settings.getBool("dodger.preferMotion", true);
         unitR = unit.type.hitSize * 0.5f;
+
+        // нормализуем текущее движение юнита для motion-continuity бонуса.
+        // motionFactor ∈ [0..1]: 0 = стоит, 1 = летит на полной скорости.
+        float vlen = Mathf.sqrt(unit.vel.x*unit.vel.x + unit.vel.y*unit.vel.y);
+        if (vlen > 0.1f) {
+            motionNx = unit.vel.x / vlen;
+            motionNy = unit.vel.y / vlen;
+            motionFactor = Math.min(1f, vlen / unit.type.speed);
+        } else {
+            motionNx = 0f; motionNy = 0f; motionFactor = 0f;
+        }
 
         // ping compensation: bullets are shifted forward by RTT, so my command applies on a state
         // ping ticks "future" relative to client view.
@@ -237,7 +254,10 @@ public final class BulletDodger {
             float fx = simX[H], fy = simY[H];
             float bias = pivotBias(fx, fy, pivot);
             float cont = fHysteresis ? -((dx*prevDx + dy*prevDy) / (speed*speed)) * HYST_WEIGHT : 0f;
-            insertBeam(beam1, beam, danger + bias + cont, dx, dy, fx, fy, endVel.x, endVel.y, -1);
+            float motion = fPreferMotion
+                ? -((dx*motionNx + dy*motionNy) / speed) * MOTION_WEIGHT * motionFactor
+                : 0f;
+            insertBeam(beam1, beam, danger + bias + cont + motion, dx, dy, fx, fy, endVel.x, endVel.y, -1);
         }
 
         // если steps == 1, выбираем из beam1 и заканчиваем
@@ -289,7 +309,10 @@ public final class BulletDodger {
             float danger = scoreSim(bulletOffset) + zonesPenalty();
             float bias = pivotBias(simX[H], simY[H], pivot);
             float cont = fHysteresis ? -((dx*parent.dx + dy*parent.dy) / (speed*speed)) * HYST_WEIGHT * 0.3f : 0f;
-            insertBeam(childBeam, beam, parent.score + danger + bias + cont, dx, dy,
+            float motion = fPreferMotion
+                ? -((dx*motionNx + dy*motionNy) / speed) * MOTION_WEIGHT * motionFactor * 0.5f
+                : 0f;
+            insertBeam(childBeam, beam, parent.score + danger + bias + cont + motion, dx, dy,
                        simX[H], simY[H], endVel.x, endVel.y, parentIdx);
         }
     }

@@ -82,6 +82,7 @@ public class DodgerMod extends Mod {
             t.checkPref("dodger.densityCap",   true);  // build 8: штраф pivot-score за плотность турелей
             t.checkPref("dodger.homingSim",    true);  // build 14: итеративная симуляция homing-пуль
             t.checkPref("dodger.subtick",      true);  // build 14: sub-tick CPA через параболу
+            t.checkPref("dodger.preferMotion", true);  // build 17: бонус за продолжение текущего вектора движения
             // ping compensation: сдвигает положение пуль вперёд на RTT.
             t.checkPref("dodger.pingAuto", true);  // если в multiplayer — берём пинг из netClient
             t.sliderPref("dodger.pingMs", 0, 0, 500, 10,
