@@ -267,16 +267,30 @@ public class DodgerMod extends Mod {
             unit.vel.set(finalMove);
 
             // прицеливание + стрельба: перебиваем игровой ввод полностью.
-            // mouseX/mouseY переписываем заранее, чтобы Player.update в следующий тик
-            // взял уже наши координаты, а не курсор игрока.
+            // ВАЖНО: rotation пишем напрямую, не через lookAt (там moveToward с rotateSpeed —
+            // одна-две градуса за тик, не успевает за курсором, который продолжает дёргать).
             if (target != null) {
+                float ang = arc.math.Mathf.atan2(target.y - unit.y, target.x - unit.x)
+                            * arc.math.Mathf.radDeg;
+                unit.rotation = ang;
+                unit.aim(target.x, target.y);
                 Vars.player.mouseX = target.x;
                 Vars.player.mouseY = target.y;
                 Vars.player.shooting = true;
-                unit.aim(target.x, target.y);
-                unit.lookAt(target.x, target.y);
+                // force weapon mounts shoot/rotate flags напрямую, чтобы не зависеть от controller'а
+                try {
+                    for (var mount : unit.mounts) {
+                        mount.shoot = true;
+                        mount.rotate = true;
+                        mount.aimX = target.x;
+                        mount.aimY = target.y;
+                    }
+                } catch (Throwable t) { /* mounts API мог измениться, не критично */ }
             } else {
                 Vars.player.shooting = false;
+                try {
+                    for (var mount : unit.mounts) mount.shoot = false;
+                } catch (Throwable t) { }
             }
 
             if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
