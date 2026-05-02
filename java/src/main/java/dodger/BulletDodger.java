@@ -1,7 +1,8 @@
-// Build: 13
+// Build: 14
 package dodger;
 
 import arc.Core;
+import arc.math.Angles;
 import arc.math.Mathf;
 import arc.math.geom.Vec2;
 import arc.struct.Seq;
@@ -30,11 +31,11 @@ public final class BulletDodger {
 
     private static final float REACT_HORIZON = 25f;
     private static final int   H             = 25;
-    private static final float SAFE_R        = 12f;
     private static final float SCAN_R        = 200f;
     private static final int   BEAM_MAX      = 16;
     private static final float PIVOT_BIAS    = 0.01f;
     private static final float HYST_WEIGHT   = 0.5f;
+    private static final float SAFETY_MARGIN = 2f;   // px поверх реальной hit-зоны
 
     /** Дефолты для settings, если ключи ещё не заданы. */
     public static final int    DEFAULT_SAMPLES    = 360;
@@ -54,6 +55,11 @@ public final class BulletDodger {
     private boolean fLifetime;
     private boolean fHysteresis;
     private boolean fDamageWeight;
+    private boolean fHoming;     // итеративная симуляция homing-пуль (build 14)
+    private boolean fSubtick;    // sub-tick точность через параболическую интерполяцию
+
+    /** Радиус юнита (hitSize/2). Кэшируется в начале compute. */
+    private float unitR;
 
     private final Seq<Bullet> nearby = new Seq<>(64);
     private final Vec2  evade  = new Vec2();
@@ -124,6 +130,9 @@ public final class BulletDodger {
         // physics OFF по умолчанию: мы пишем unit.vel.set, скорость меняется мгновенно.
         // Включать имеет смысл только если переключаешься на movePref-управление.
         fPhysics      = Core.settings.getBool("dodger.physics",      false);
+        fHoming       = Core.settings.getBool("dodger.homingSim",    true);
+        fSubtick      = Core.settings.getBool("dodger.subtick",      true);
+        unitR = unit.type.hitSize * 0.5f;
         fLifetime     = Core.settings.getBool("dodger.lifetime",     true);
         fHysteresis   = Core.settings.getBool("dodger.hysteresis",   true);
         fDamageWeight = Core.settings.getBool("dodger.damageWeight", true);
@@ -314,6 +323,7 @@ public final class BulletDodger {
 
     private float scoreSim(float bulletTimeOffset) {
         float total = 0;
+        boolean iterateHoming = fHoming && bulletTimeOffset == 0f;
         for (int i = 0; i < nearby.size; i++) {
             Bullet b = nearby.get(i);
             int maxT;
@@ -324,23 +334,115 @@ public final class BulletDodger {
             } else {
                 maxT = H;
             }
-            float minD2 = Float.POSITIVE_INFINITY;
-            int   minT  = 0;
-            for (int t = 0; t <= maxT; t++) {
-                float bt = bulletTimeOffset + t;
-                float bx = b.x + b.vel.x * bt;
-                float by = b.y + b.vel.y * bt;
-                float dx = bx - simX[t];
-                float dy = by - simY[t];
-                float d2 = dx*dx + dy*dy;
-                if (d2 < minD2) { minD2 = d2; minT = t; }
+
+            // per-bullet threshold по реальному размеру пули
+            float bulletR = b.type.hitSize;
+            if (bulletR < 1f) bulletR = 4f;
+            float thr = unitR + bulletR + SAFETY_MARGIN;
+            float thr2 = thr * thr;
+
+            float minD2; float minTf;
+            boolean homing = iterateHoming && b.type.homingPower > 1e-4f;
+            if (homing) {
+                long packed = simHoming(b, maxT, thr2);
+                minD2 = Float.intBitsToFloat((int)(packed >>> 32));
+                minTf = Float.intBitsToFloat((int)(packed & 0xFFFFFFFFL));
+            } else {
+                long packed = simLinearSubtick(b, bulletTimeOffset, maxT);
+                minD2 = Float.intBitsToFloat((int)(packed >>> 32));
+                minTf = Float.intBitsToFloat((int)(packed & 0xFFFFFFFFL));
             }
-            if (minD2 >= SAFE_R*SAFE_R) continue;
+
+            if (minD2 >= thr2) continue;
             float dCPA = Mathf.sqrt(minD2);
             float wDam = fDamageWeight ? Mathf.clamp(b.damage / 15f, 0.5f, 5f) : 1f;
-            total += (SAFE_R - dCPA) * (REACT_HORIZON - minT) / REACT_HORIZON * wDam;
+            total += (thr - dCPA) * (REACT_HORIZON - minTf) / REACT_HORIZON * wDam;
         }
         return total;
+    }
+
+    /**
+     * Линейная симуляция пули с sub-tick CPA через минимум на каждом отрезке [t,t+1].
+     * Возвращает (minD2, minT) упакованное в long.
+     */
+    private long simLinearSubtick(Bullet b, float bulletTimeOffset, int maxT) {
+        float minD2 = Float.POSITIVE_INFINITY;
+        float minTf = 0f;
+        float bvx = b.vel.x, bvy = b.vel.y;
+        for (int t = 0; t < maxT; t++) {
+            float bxA = b.x + bvx * (bulletTimeOffset + t);
+            float byA = b.y + bvy * (bulletTimeOffset + t);
+            float bxB = bxA + bvx;
+            float byB = byA + bvy;
+            float sxA = simX[t],   syA = simY[t];
+            float sxB = simX[t+1], syB = simY[t+1];
+            // diff(s) = (sxA - bxA + s*((sxB-sxA)-(bxB-bxA)), ...) для s∈[0,1]
+            float A = sxA - bxA, C = syA - byA;
+            float B = (sxB - sxA) - (bxB - bxA);
+            float D = (syB - syA) - (byB - byA);
+            float vv = B*B + D*D;
+            float s;
+            if (vv < 1e-6f) s = 0;
+            else            s = -(A*B + C*D) / vv;
+            if (s < 0) s = 0;
+            else if (s > 1) s = 1;
+            float diffX = A + s*B;
+            float diffY = C + s*D;
+            float d2 = diffX*diffX + diffY*diffY;
+            if (d2 < minD2) { minD2 = d2; minTf = t + s; }
+            if (fSubtick == false) {
+                // если sub-tick выключен — проверяем только endpoint каждого тика
+                float dEx = bxA - sxA, dEy = byA - syA;
+                float d2e = dEx*dEx + dEy*dEy;
+                if (d2e < minD2) { minD2 = d2e; minTf = t; }
+            }
+        }
+        // плюс последняя точка t=maxT
+        float bxL = b.x + bvx * (bulletTimeOffset + maxT);
+        float byL = b.y + bvy * (bulletTimeOffset + maxT);
+        float dx = bxL - simX[maxT], dy = byL - simY[maxT];
+        float d2 = dx*dx + dy*dy;
+        if (d2 < minD2) { minD2 = d2; minTf = maxT; }
+        return packFloats(minD2, minTf);
+    }
+
+    /**
+     * Итеративная симуляция homing-пули: каждый тик vel поворачивается к юниту в пределах homingRange.
+     * Mindustry: vel.setAngle(moveToward(currentAngle, targetAngle, homingPower * 50)) — градусы за тик.
+     */
+    private long simHoming(Bullet b, int maxT, float thr2) {
+        float bx = b.x, by = b.y;
+        float bvx = b.vel.x, bvy = b.vel.y;
+        float homingRange = b.type.homingRange;
+        float maxTurnDeg  = b.type.homingPower * 50f;
+        float minD2 = Float.POSITIVE_INFINITY;
+        float minTf = 0f;
+
+        for (int t = 0; t <= maxT; t++) {
+            float dx = bx - simX[t];
+            float dy = by - simY[t];
+            float d2 = dx*dx + dy*dy;
+            if (d2 < minD2) { minD2 = d2; minTf = t; }
+
+            if (t == maxT) break;
+
+            // homing rotation если пуля в homingRange от юнита
+            if (d2 < homingRange*homingRange) {
+                float currAngleDeg   = Mathf.atan2(bvy, bvx) * Mathf.radDeg;
+                float targetAngleDeg = Mathf.atan2(simY[t] - by, simX[t] - bx) * Mathf.radDeg;
+                float newAngleDeg    = Angles.moveToward(currAngleDeg, targetAngleDeg, maxTurnDeg);
+                float speedB = Mathf.sqrt(bvx*bvx + bvy*bvy);
+                bvx = Mathf.cos(newAngleDeg * Mathf.degRad) * speedB;
+                bvy = Mathf.sin(newAngleDeg * Mathf.degRad) * speedB;
+            }
+            bx += bvx;
+            by += bvy;
+        }
+        return packFloats(minD2, minTf);
+    }
+
+    private static long packFloats(float a, float b) {
+        return (((long) Float.floatToRawIntBits(a)) << 32) | (Float.floatToRawIntBits(b) & 0xFFFFFFFFL);
     }
 
     private int countSimHits(float bulletTimeOffset) {
@@ -355,6 +457,10 @@ public final class BulletDodger {
             } else {
                 maxT = H;
             }
+            float bulletR = b.type.hitSize;
+            if (bulletR < 1f) bulletR = 4f;
+            float thr = unitR + bulletR + SAFETY_MARGIN;
+            float thr2 = thr * thr;
             float minD2 = Float.POSITIVE_INFINITY;
             for (int t = 0; t <= maxT; t++) {
                 float bt = bulletTimeOffset + t;
@@ -365,7 +471,7 @@ public final class BulletDodger {
                 float d2 = dx*dx + dy*dy;
                 if (d2 < minD2) minD2 = d2;
             }
-            if (minD2 < SAFE_R*SAFE_R) n++;
+            if (minD2 < thr2) n++;
         }
         return n;
     }

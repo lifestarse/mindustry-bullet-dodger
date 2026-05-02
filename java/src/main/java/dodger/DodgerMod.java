@@ -1,4 +1,4 @@
-// Build: 13
+// Build: 14
 package dodger;
 
 import arc.Core;
@@ -30,6 +30,7 @@ public class DodgerMod extends Mod {
 
     private static final String KEY_ENABLED   = "dodger.enabled";
     private static final String KEY_MOVE_PREF = "dodger.movePref";
+    private static final String KEY_PASSIVE   = "dodger.passive";
     private static final int    REPLAN_FALLBACK_TICKS = 60;
     private static final int    LOG_PERIOD_TICKS = 60;
 
@@ -56,6 +57,8 @@ public class DodgerMod extends Mod {
         Vars.ui.settings.addCategory("Dodger", t -> {
             t.checkPref(KEY_ENABLED, false);
             t.checkPref(KEY_MOVE_PREF, false);
+            // passive: мод не баитит, не управляет — но перехватывает движение когда летит пуля.
+            t.checkPref(KEY_PASSIVE, false);
             // тюнинг beam search'а — точность vs CPU
             t.sliderPref("dodger.samples",   BulletDodger.DEFAULT_SAMPLES,    90, 720, 90,
                 v -> v + " dirs/step");
@@ -74,6 +77,8 @@ public class DodgerMod extends Mod {
             t.checkPref("dodger.hysteresis",   true);  // build 8: continuity бонус
             t.checkPref("dodger.damageWeight", true);  // build 8: вес угрозы по урону пули
             t.checkPref("dodger.densityCap",   true);  // build 8: штраф pivot-score за плотность турелей
+            t.checkPref("dodger.homingSim",    true);  // build 14: итеративная симуляция homing-пуль
+            t.checkPref("dodger.subtick",      true);  // build 14: sub-tick CPA через параболу
         });
 
         Events.on(EventType.BlockBuildEndEvent.class, e -> {
@@ -105,6 +110,7 @@ public class DodgerMod extends Mod {
 
     private boolean isEnabled()        { return Core.settings.getBool(KEY_ENABLED, false); }
     private boolean useMovePref()      { return Core.settings.getBool(KEY_MOVE_PREF, false); }
+    private boolean isPassive()        { return Core.settings.getBool(KEY_PASSIVE, false); }
     private void    setEnabled(boolean v) { Core.settings.put(KEY_ENABLED, v); }
 
     private void tick() {
@@ -119,6 +125,34 @@ public class DodgerMod extends Mod {
         if (Vars.player == null) return;
         Unit unit = Vars.player.unit();
         if (unit == null || unit.dead) return;
+
+        // PASSIVE MODE: мод не баитит, ничего не строит, просто перехватывает движение
+        // когда летят пули. В остальное время игрок управляет сам.
+        if (isPassive()) {
+            Vec2 evade = dodger.compute(unit, null);  // null pivot = без bias
+            if (evade.len2() > 0.01f) {
+                if (useMovePref()) {
+                    try { unit.movePref(evade); } catch (Throwable t) { unit.vel.set(evade); }
+                } else {
+                    unit.vel.set(evade);
+                }
+                lastWasEvade = true;
+                lastFinal.set(evade);
+            } else {
+                lastWasEvade = false;
+                lastFinal.setZero();
+            }
+            // лог
+            if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
+                Log.info(String.format(
+                    "[dodger PASSIVE] scanned=%d enemy=%d hits-after-evade=%d danger=%.2f | mode=%s | move=(%.2f,%.2f) vel=(%.2f,%.2f)",
+                    dodger.bulletsScanned, dodger.enemyBullets, dodger.threatCount, dodger.bestDanger,
+                    lastWasEvade ? "EVADE" : "IDLE",
+                    lastFinal.x, lastFinal.y, unit.vel.x, unit.vel.y));
+                ticksSinceLog = 0;
+            }
+            return;
+        }
 
         ticksSinceReplan++;
         if (replanPending || ticksSinceReplan >= REPLAN_FALLBACK_TICKS) {
