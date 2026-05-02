@@ -1,6 +1,7 @@
-// Build: 10
+// Build: 11
 package dodger;
 
+import arc.Core;
 import arc.math.Mathf;
 import arc.math.geom.Vec2;
 import arc.struct.Seq;
@@ -9,38 +10,44 @@ import mindustry.gen.Groups;
 import mindustry.gen.Unit;
 
 /**
- * 3-step beam search uклонение.
+ * 1..3-step beam search uклонение. Параметры читаются из Core.settings:
+ *   dodger.samples   — направлений-кандидатов на шаг (45/90/180/360/540/720)
+ *   dodger.steps     — глубина planning'а (1/2/3)
+ *   dodger.beamWidth — сколько лучших узлов держим между шагами (1..MAX_BEAM)
  *
- * Step 1: 360 кандидатов первого шага → топ-12 по одношаговому score.
- * Step 2: для каждого из 12 → 360 продолжений → топ-12 по двухшаговой сумме.
- * Step 3: для каждого из 12 → 360 продолжений → берём общий минимум трёхшагового score.
+ * Внутри: массивы под BEAM_MAX = 16, реально используется первые N.
  *
- * Выбранное действие: первый шаг родословной победителя.
- * Trace: bestStep3 → beam2[parent2].ancestor1 → beam1[ancestor1].dx,dy
+ * Step 1: SAMPLES первых ходов из (unit.x/y, unit.vel) → beam1[N]
+ * Step 2: для каждого beam1 — SAMPLES продолжений → beam2[N]
+ * Step 3: для каждого beam2 — SAMPLES продолжений → beam3[N]
+ * Победитель — наименьший score; trace через ancestors к первому шагу.
  *
- * Стоимость: 360 + 12*360 + 12*360 = 9000 траекторий × 25 тиков × ~30 пуль
- *            ≈ 6.75M bullet-checks/тик ≈ 405M/сек. ~3-5% одного ядра.
- *
- * Прочее (сохранилось из build 9): physical sim, lifetime, hysteresis,
- * damage weight, pivot bias.
+ * Каждая симуляция учитывает физику юнита: vel += norm * speed * accel; vel *= 1-drag; clip.
+ * Каждая пуля проверяется на t* минимума dCPA в окне [0, min(H, remaining_lifetime)].
+ * danger взвешивается по урону пули (Spectre 80 → ×5, Duo медь 9 → ×0.6).
  */
 public final class BulletDodger {
 
-    private static final float REACT_HORIZON   = 25f;
-    private static final int   H               = 25;
-    private static final float SAFE_R          = 12f;
-    private static final float SCAN_R          = 200f;
+    private static final float REACT_HORIZON = 25f;
+    private static final int   H             = 25;
+    private static final float SAFE_R        = 12f;
+    private static final float SCAN_R        = 200f;
+    private static final int   BEAM_MAX      = 16;
+    private static final float PIVOT_BIAS    = 0.01f;
+    private static final float HYST_WEIGHT   = 0.5f;
 
-    private static final int   SAMPLES         = 360;
-    private static final int   BEAM_WIDTH      = 12;
-
-    private static final float PIVOT_BIAS      = 0.01f;
-    private static final float HYST_WEIGHT     = 0.5f;
+    /** Дефолты для settings, если ключи ещё не заданы. */
+    public static final int    DEFAULT_SAMPLES    = 360;
+    public static final int    DEFAULT_STEPS      = 3;
+    public static final int    DEFAULT_BEAM_WIDTH = 12;
 
     public int   threatCount;
     public float bestDanger;
     public int   bulletsScanned;
     public int   enemyBullets;
+    public int   lastSamples;
+    public int   lastSteps;
+    public int   lastBeam;
 
     private final Seq<Bullet> nearby = new Seq<>(64);
     private final Vec2  evade  = new Vec2();
@@ -49,50 +56,44 @@ public final class BulletDodger {
     private final float[] simX = new float[H + 1];
     private final float[] simY = new float[H + 1];
 
-    /** Beam1 — топ-K первого шага. */
-    private final BeamEntry[] beam1 = new BeamEntry[BEAM_WIDTH];
-    /** Beam2 — топ-K двухшаговых планов. */
-    private final BeamEntry[] beam2 = new BeamEntry[BEAM_WIDTH];
-    /** Beam3 — топ-K трёхшаговых планов. */
-    private final BeamEntry[] beam3 = new BeamEntry[BEAM_WIDTH];
+    private final BeamEntry[] beam1 = new BeamEntry[BEAM_MAX];
+    private final BeamEntry[] beam2 = new BeamEntry[BEAM_MAX];
+    private final BeamEntry[] beam3 = new BeamEntry[BEAM_MAX];
 
     private float prevDx = 0f, prevDy = 0f;
 
     public BulletDodger() {
-        for (int i = 0; i < BEAM_WIDTH; i++) {
+        for (int i = 0; i < BEAM_MAX; i++) {
             beam1[i] = new BeamEntry();
             beam2[i] = new BeamEntry();
             beam3[i] = new BeamEntry();
         }
     }
 
-    /** Состояние одного узла beam search. */
     private static final class BeamEntry {
         float score;
-        float dx, dy;          // первый шаг ЭТОГО узла (не корневой!)
-        float endX, endY;      // позиция в конце шага
-        float endVx, endVy;    // скорость в конце шага
-        int   ancestor;        // индекс в предыдущем beam (или -1 для beam1)
+        float dx, dy;
+        float endX, endY;
+        float endVx, endVy;
+        int   ancestor;
     }
 
-    private static void resetBeam(BeamEntry[] beam) {
-        for (BeamEntry e : beam) e.score = Float.POSITIVE_INFINITY;
+    private static void resetBeam(BeamEntry[] beam, int width) {
+        for (int i = 0; i < width; i++) beam[i].score = Float.POSITIVE_INFINITY;
     }
 
-    /** Вставка узла в beam (топ-K минимумов). */
-    private static void insertBeam(BeamEntry[] beam,
+    private static void insertBeam(BeamEntry[] beam, int width,
                                    float score, float dx, float dy,
                                    float endX, float endY, float endVx, float endVy,
                                    int ancestor) {
-        if (score >= beam[BEAM_WIDTH - 1].score) return;
-        int pos = BEAM_WIDTH;
-        for (int i = 0; i < BEAM_WIDTH; i++) {
+        if (score >= beam[width - 1].score) return;
+        int pos = width;
+        for (int i = 0; i < width; i++) {
             if (score < beam[i].score) { pos = i; break; }
         }
-        if (pos >= BEAM_WIDTH) return;
-        // ротация хвоста: возьмём последний элемент и вставим на pos
-        BeamEntry tail = beam[BEAM_WIDTH - 1];
-        for (int i = BEAM_WIDTH - 1; i > pos; i--) beam[i] = beam[i-1];
+        if (pos >= width) return;
+        BeamEntry tail = beam[width - 1];
+        for (int i = width - 1; i > pos; i--) beam[i] = beam[i-1];
         beam[pos] = tail;
         tail.score = score;
         tail.dx = dx; tail.dy = dy;
@@ -110,10 +111,18 @@ public final class BulletDodger {
 
         if (unit == null || unit.dead) return evade;
 
+        // ---- читаем настройки ----
+        int samples = clampInt(Core.settings.getInt("dodger.samples", DEFAULT_SAMPLES), 8, 720);
+        int steps   = clampInt(Core.settings.getInt("dodger.steps",   DEFAULT_STEPS),   1, 3);
+        int beam    = clampInt(Core.settings.getInt("dodger.beamWidth", DEFAULT_BEAM_WIDTH), 1, BEAM_MAX);
+        lastSamples = samples;
+        lastSteps   = steps;
+        lastBeam    = beam;
+
         final int   teamId = unit.team.id;
-        final float speed = unit.type.speed;
-        final float accel = unit.type.accel;
-        final float drag  = unit.type.drag;
+        final float speed  = unit.type.speed;
+        final float accel  = unit.type.accel;
+        final float drag   = unit.type.drag;
         final float ux = unit.x, uy = unit.y;
         final float uvx = unit.vel.x, uvy = unit.vel.y;
 
@@ -131,20 +140,20 @@ public final class BulletDodger {
 
         if (nearby.isEmpty()) return evade;
 
-        // baseline: стоять на месте
+        // baseline
         Vec2 endVel = simulate(ux, uy, uvx, uvy, 0f, 0f, speed, accel, drag);
         float dangerStill = scoreSim(0f);
         if (dangerStill <= 1e-3f) return evade;
 
         float currentBias = pivotBias(ux, uy, pivot);
 
-        // ============== STEP 1: 360 кандидатов → beam1[12] ==============
-        resetBeam(beam1);
-        // включаем "стоять на месте" как кандидата beam1[?] на случай если все направления хуже
-        insertBeam(beam1, dangerStill + currentBias, 0f, 0f, ux, uy, uvx*(1-drag), uvy*(1-drag), -1);
+        // ---------- STEP 1 ----------
+        resetBeam(beam1, beam);
+        insertBeam(beam1, beam, dangerStill + currentBias, 0f, 0f,
+                   ux, uy, uvx*(1-drag), uvy*(1-drag), -1);
 
-        for (int k = 0; k < SAMPLES; k++) {
-            float a  = k * 2f * Mathf.PI / SAMPLES;
+        for (int k = 0; k < samples; k++) {
+            float a  = k * 2f * Mathf.PI / samples;
             float dx = Mathf.cos(a) * speed;
             float dy = Mathf.sin(a) * speed;
             endVel = simulate(ux, uy, uvx, uvy, dx, dy, speed, accel, drag);
@@ -152,93 +161,100 @@ public final class BulletDodger {
             float fx = simX[H], fy = simY[H];
             float bias = pivotBias(fx, fy, pivot);
             float cont = -((dx*prevDx + dy*prevDy) / (speed*speed)) * HYST_WEIGHT;
-            insertBeam(beam1, danger + bias + cont, dx, dy, fx, fy, endVel.x, endVel.y, -1);
+            insertBeam(beam1, beam, danger + bias + cont, dx, dy, fx, fy, endVel.x, endVel.y, -1);
         }
 
-        // ============== STEP 2: для каждого из beam1 → 360 → beam2[12] ==============
-        resetBeam(beam2);
-        for (int p = 0; p < BEAM_WIDTH; p++) {
+        // если steps == 1, выбираем из beam1 и заканчиваем
+        if (steps == 1) {
+            return finish(beam1, beam, ux, uy, uvx, uvy, speed, accel, drag, null, null);
+        }
+
+        // ---------- STEP 2 ----------
+        resetBeam(beam2, beam);
+        for (int p = 0; p < beam; p++) {
             BeamEntry parent = beam1[p];
             if (!Float.isFinite(parent.score)) continue;
-            // baseline продолжения: стоять
-            endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
-                              0f, 0f, speed, accel, drag);
-            float baseDanger = scoreSim(H);
-            float baseBias = pivotBias(simX[H], simY[H], pivot);
-            insertBeam(beam2, parent.score + baseDanger + baseBias, 0f, 0f,
-                       simX[H], simY[H], endVel.x, endVel.y, p);
-
-            for (int k = 0; k < SAMPLES; k++) {
-                float a = k * 2f * Mathf.PI / SAMPLES;
-                float dx = Mathf.cos(a) * speed;
-                float dy = Mathf.sin(a) * speed;
-                endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
-                                  dx, dy, speed, accel, drag);
-                float danger = scoreSim(H);
-                float bias = pivotBias(simX[H], simY[H], pivot);
-                float cont = -((dx*parent.dx + dy*parent.dy) / (speed*speed)) * HYST_WEIGHT * 0.3f;
-                insertBeam(beam2, parent.score + danger + bias + cont, dx, dy,
-                           simX[H], simY[H], endVel.x, endVel.y, p);
-            }
+            expandBeam(parent, beam2, beam, samples, p, H, speed, accel, drag, pivot);
         }
 
-        // ============== STEP 3: для каждого beam2 → 360 → beam3[12] ==============
-        resetBeam(beam3);
-        for (int p = 0; p < BEAM_WIDTH; p++) {
+        if (steps == 2) {
+            return finish(beam2, beam, ux, uy, uvx, uvy, speed, accel, drag, beam1, null);
+        }
+
+        // ---------- STEP 3 ----------
+        resetBeam(beam3, beam);
+        for (int p = 0; p < beam; p++) {
             BeamEntry parent = beam2[p];
             if (!Float.isFinite(parent.score)) continue;
-            // baseline
+            expandBeam(parent, beam3, beam, samples, p, 2*H, speed, accel, drag, pivot);
+        }
+
+        return finish(beam3, beam, ux, uy, uvx, uvy, speed, accel, drag, beam2, beam1);
+    }
+
+    /** Расширение одного узла beam: from parent (endX, endY, endVx, endVy) к child beam. */
+    private void expandBeam(BeamEntry parent, BeamEntry[] childBeam, int beam,
+                            int samples, int parentIdx, int bulletOffset,
+                            float speed, float accel, float drag, Vec2 pivot) {
+        // baseline продолжения: ничего не делать
+        Vec2 endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
+                               0f, 0f, speed, accel, drag);
+        float baseDanger = scoreSim(bulletOffset);
+        float baseBias = pivotBias(simX[H], simY[H], pivot);
+        insertBeam(childBeam, beam, parent.score + baseDanger + baseBias, 0f, 0f,
+                   simX[H], simY[H], endVel.x, endVel.y, parentIdx);
+
+        for (int k = 0; k < samples; k++) {
+            float a = k * 2f * Mathf.PI / samples;
+            float dx = Mathf.cos(a) * speed;
+            float dy = Mathf.sin(a) * speed;
             endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
-                              0f, 0f, speed, accel, drag);
-            float baseDanger = scoreSim(2*H);
-            float baseBias = pivotBias(simX[H], simY[H], pivot);
-            insertBeam(beam3, parent.score + baseDanger + baseBias, 0f, 0f,
-                       simX[H], simY[H], endVel.x, endVel.y, p);
-
-            for (int k = 0; k < SAMPLES; k++) {
-                float a = k * 2f * Mathf.PI / SAMPLES;
-                float dx = Mathf.cos(a) * speed;
-                float dy = Mathf.sin(a) * speed;
-                endVel = simulate(parent.endX, parent.endY, parent.endVx, parent.endVy,
-                                  dx, dy, speed, accel, drag);
-                float danger = scoreSim(2*H);
-                float bias = pivotBias(simX[H], simY[H], pivot);
-                float cont = -((dx*parent.dx + dy*parent.dy) / (speed*speed)) * HYST_WEIGHT * 0.3f;
-                insertBeam(beam3, parent.score + danger + bias + cont, dx, dy,
-                           simX[H], simY[H], endVel.x, endVel.y, p);
-            }
+                              dx, dy, speed, accel, drag);
+            float danger = scoreSim(bulletOffset);
+            float bias = pivotBias(simX[H], simY[H], pivot);
+            float cont = -((dx*parent.dx + dy*parent.dy) / (speed*speed)) * HYST_WEIGHT * 0.3f;
+            insertBeam(childBeam, beam, parent.score + danger + bias + cont, dx, dy,
+                       simX[H], simY[H], endVel.x, endVel.y, parentIdx);
         }
+    }
 
-        // ============== TRACE: победитель beam3 → beam2 → beam1 → action ==============
-        BeamEntry winner3 = beam3[0];
-        if (!Float.isFinite(winner3.score)) {
+    /** Берём beam[0] (минимум), trace ancestors, применяем первый шаг. */
+    private Vec2 finish(BeamEntry[] finalBeam, int beam,
+                        float ux, float uy, float uvx, float uvy,
+                        float speed, float accel, float drag,
+                        BeamEntry[] mid, BeamEntry[] first) {
+        BeamEntry winner = finalBeam[0];
+        if (!Float.isFinite(winner.score)) {
             prevDx = 0; prevDy = 0;
             return evade;
         }
-        BeamEntry winner2 = beam2[winner3.ancestor];
-        BeamEntry winner1 = beam1[winner2.ancestor];
+        // traceback: до beam1[ancestor] чьё (dx, dy) — наш первый шаг
+        BeamEntry rootStep;
+        if (mid == null) {
+            rootStep = winner;
+        } else if (first == null) {
+            rootStep = mid[winner.ancestor];
+        } else {
+            BeamEntry midEntry = mid[winner.ancestor];
+            rootStep = first[midEntry.ancestor];
+        }
 
-        bestDanger = winner3.score;
+        bestDanger = winner.score;
 
-        // если действие первого шага — стоять на месте, не дёргаемся
-        if (winner1.dx == 0f && winner1.dy == 0f) {
+        if (rootStep.dx == 0f && rootStep.dy == 0f) {
             prevDx = 0; prevDy = 0;
             return evade;
         }
 
-        // пересимулируем выбранный первый шаг для подсчёта реальных hits
-        simulate(ux, uy, uvx, uvy, winner1.dx, winner1.dy, speed, accel, drag);
+        simulate(ux, uy, uvx, uvy, rootStep.dx, rootStep.dy, speed, accel, drag);
         threatCount = countSimHits(0f);
 
-        prevDx = winner1.dx;
-        prevDy = winner1.dy;
-        evade.set(winner1.dx, winner1.dy);
+        prevDx = rootStep.dx;
+        prevDy = rootStep.dy;
+        evade.set(rootStep.dx, rootStep.dy);
         return evade;
     }
 
-    /**
-     * Симулирует H тиков физики юнита. Заполняет simX/simY[0..H], возвращает финальную скорость.
-     */
     private Vec2 simulate(float startX, float startY, float startVx, float startVy,
                           float dx, float dy, float speed, float accel, float drag) {
         float len = Mathf.sqrt(dx*dx + dy*dy);
@@ -278,7 +294,6 @@ public final class BulletDodger {
             float remain = b.type.lifetime - b.time - bulletTimeOffset;
             int   maxT = (int) Math.min(H, Math.max(0, remain));
             if (maxT <= 0) continue;
-
             float minD2 = Float.POSITIVE_INFINITY;
             int   minT  = 0;
             for (int t = 0; t <= maxT; t++) {
@@ -324,5 +339,9 @@ public final class BulletDodger {
         if (pivot == null) return 0f;
         float dx = fx - pivot.x, dy = fy - pivot.y;
         return Mathf.sqrt(dx*dx + dy*dy) * PIVOT_BIAS;
+    }
+
+    private static int clampInt(int v, int lo, int hi) {
+        return Math.max(lo, Math.min(hi, v));
     }
 }

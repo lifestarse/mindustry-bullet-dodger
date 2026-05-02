@@ -1,4 +1,4 @@
-// Build: 5
+// Build: 11
 package dodger;
 
 import arc.Core;
@@ -56,6 +56,13 @@ public class DodgerMod extends Mod {
         Vars.ui.settings.addCategory("Dodger", t -> {
             t.checkPref(KEY_ENABLED, false);
             t.checkPref(KEY_MOVE_PREF, false);
+            // тюнинг beam search'а — точность vs CPU
+            t.sliderPref("dodger.samples",   BulletDodger.DEFAULT_SAMPLES,    90, 720, 90,
+                v -> v + " dirs/step");
+            t.sliderPref("dodger.steps",     BulletDodger.DEFAULT_STEPS,       1,   3,  1,
+                v -> v + " step" + (v == 1 ? "" : "s"));
+            t.sliderPref("dodger.beamWidth", BulletDodger.DEFAULT_BEAM_WIDTH,  1,  16,  1,
+                v -> "beam " + v);
         });
 
         Events.on(EventType.BlockBuildEndEvent.class, e -> {
@@ -147,8 +154,9 @@ public class DodgerMod extends Mod {
         if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
             Vec2 p = planner.currentPivot;
             Log.info(String.format(
-                "[dodger] pivot=(%.0f,%.0f) score=%.1f | scanned=%d enemy=%d hits-after-evade=%d danger=%.2f | mode=%s | move=(%.2f,%.2f) vel=(%.2f,%.2f) unit=(%.0f,%.0f)",
+                "[dodger] pivot=(%.0f,%.0f) score=%.1f | beam=%dx%d (%d steps) | scanned=%d enemy=%d hits-after-evade=%d danger=%.2f | mode=%s | move=(%.2f,%.2f) vel=(%.2f,%.2f) unit=(%.0f,%.0f)",
                 p.x, p.y, planner.currentScore,
+                dodger.lastSamples, dodger.lastBeam, dodger.lastSteps,
                 dodger.bulletsScanned, dodger.enemyBullets, dodger.threatCount, dodger.bestDanger,
                 lastWasEvade ? "EVADE" : "GOTO",
                 finalMove.x, finalMove.y,
