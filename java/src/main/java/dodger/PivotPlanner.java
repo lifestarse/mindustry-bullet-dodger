@@ -36,6 +36,8 @@ public final class PivotPlanner {
     public static final int   DEFAULT_MIN_DIST     = 50;
     /** Текущая мин. дистанция pivot↔turret. Читается из Settings ("dodger.minDist"). */
     private float minDist = DEFAULT_MIN_DIST;
+    /** Множитель closeness-бонуса (0..2). 1.0 = дефолт, 0 = нет премии за близость. */
+    private float aggression = 1f;
 
     /** Сверху сколько турелей считаем "близко" — больше => плотный огонь. */
     private static final float DENSITY_RADIUS = 80f;
@@ -55,6 +57,8 @@ public final class PivotPlanner {
         // обновляем настройки. minDist=0 → ограничение фактически выключено.
         minDist = Math.max(0f, Math.min(120f, Core.settings.getInt("dodger.minDist", DEFAULT_MIN_DIST)));
         fDensityCap = Core.settings.getBool("dodger.densityCap", true);
+        // aggression: 0..200 → 0..2.0 множитель на closeness
+        aggression = Math.max(0f, Math.min(2f, Core.settings.getInt("dodger.aggression", 100) / 100f));
         bait.clear();
         death.clear();
 
@@ -175,7 +179,7 @@ public final class PivotPlanner {
             if (d2 < minDist*minDist) return -1f;
             float d = Mathf.sqrt(d2);
             float closeness = 1f - (d - minDist) / (rMax - minDist);
-            total += 1f + closeness;
+            total += 1f + closeness * aggression;
             if (d2 < DENSITY_RADIUS*DENSITY_RADIUS) density++;
         }
         // штраф за слишком плотный огонь: больше DENSITY_SOFT_CAP "близких" — линейный спад

@@ -73,6 +73,9 @@ public class DodgerMod extends Mod {
             // 20 px — суицид (3 тайла, борода с турелью), 120 — безопаснее (15 тайлов).
             t.sliderPref("dodger.minDist", PivotPlanner.DEFAULT_MIN_DIST,     0, 120,  5,
                 v -> (v == 0 ? "off" : v + " px") + " (0 = нет ограничения)");
+            // aggression: % бонуса за близость к стволу. 100 = дефолт, 0 = безразлично к близости.
+            t.sliderPref("dodger.aggression", 100, 0, 200, 10,
+                v -> v + "% closeness reward");
             // тумблеры post-7 фич — выключаем по одному для диагностики
             // physics: ВЫКЛ по умолчанию, т.к. vel.set игнорит accel. Включать только с movePref.
             t.checkPref("dodger.physics",      false); // build 8: физическая симуляция accel/drag
