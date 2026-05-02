@@ -52,6 +52,21 @@ public class DodgerMod extends Mod {
     private float      driftPhase    = 0f;
     private boolean    lastWasEvade  = false;
 
+    // === STATISTICS ===
+    private float lastHp = -1f;
+    private int   currentStreak  = 0;   // тиков подряд в EVADE без урона
+    private int   bestStreak     = 0;
+    private int   totalHits      = 0;
+    private int   totalEvades    = 0;
+    private int   totalDeaths    = 0;
+    private long  totalScore     = 0;
+    private int   ticksAlive     = 0;
+    private int   lastUnitId     = -1;
+    private static final int   STREAK_MILESTONE = 60;   // каждые 1с — лог
+    private static final int   SUMMARY_PERIOD   = 600;  // каждые 10с — summary
+    private static final long  HIT_PENALTY      = 100;
+    private static final long  DEATH_PENALTY    = 1000;
+
     // Lissajous: непериодичный по эффекту дрейф (периоды 30/45 не совпадают)
     private static final float DRIFT_R         = 40f;
     private static final float DRIFT_PERIOD_X  = 30f;
@@ -137,6 +152,53 @@ public class DodgerMod extends Mod {
         }
     }
 
+    /** Updates statistics based on this tick's outcome. */
+    private void updateStats(Unit unit) {
+        // detect respawn (new unit instance) → death event
+        if (lastUnitId != -1 && unit.id != lastUnitId) {
+            totalDeaths++;
+            totalScore -= DEATH_PENALTY;
+            arc.util.Log.info(String.format(
+                "[STAT] DEATH #%d streak_at_death=%d best=%d score=%d",
+                totalDeaths, currentStreak, bestStreak, totalScore));
+            currentStreak = 0;
+            lastHp = -1f;
+        }
+        lastUnitId = unit.id;
+
+        if (lastHp < 0f) { lastHp = unit.health; return; }
+        float cur = unit.health;
+        if (cur < lastHp - 0.5f) {
+            // получили урон
+            float dmg = lastHp - cur;
+            totalHits++;
+            totalScore -= HIT_PENALTY;
+            if (currentStreak > bestStreak) bestStreak = currentStreak;
+            arc.util.Log.info(String.format(
+                "[STAT] HIT #%d dmg=%.1f streak_broken=%d best=%d score=%d | mode=%s pred_danger=%.2f hits-after-evade=%d",
+                totalHits, dmg, currentStreak, bestStreak, totalScore,
+                lastWasEvade ? "EVADE" : "GOTO", dodger.bestDanger, dodger.threatCount));
+            currentStreak = 0;
+        } else if (lastWasEvade) {
+            currentStreak++;
+            totalEvades++;
+            totalScore++;
+            if (currentStreak > 0 && currentStreak % STREAK_MILESTONE == 0) {
+                arc.util.Log.info(String.format(
+                    "[STAT] +%dt streak (best=%d) score=%d",
+                    currentStreak, Math.max(currentStreak, bestStreak), totalScore));
+            }
+        }
+        lastHp = cur;
+
+        ticksAlive++;
+        if (ticksAlive % SUMMARY_PERIOD == 0) {
+            arc.util.Log.info(String.format(
+                "[STAT] summary: score=%d | %d hits, %d deaths, %d evade-ticks | curr_streak=%d best=%d",
+                totalScore, totalHits, totalDeaths, totalEvades, currentStreak, bestStreak));
+        }
+    }
+
     private boolean isEnabled()        { return Core.settings.getBool(KEY_ENABLED, false); }
     private boolean useMovePref()      { return Core.settings.getBool(KEY_MOVE_PREF, false); }
     private boolean isPassive()        { return Core.settings.getBool(KEY_PASSIVE, false); }
@@ -207,6 +269,9 @@ public class DodgerMod extends Mod {
         if (Vars.player == null) return;
         Unit unit = Vars.player.unit();
         if (unit == null || unit.dead) return;
+
+        // single-shot stats per tick — после фактической работы dodger'а
+        updateStats(unit);
 
         // PASSIVE MODE: мод не баитит, ничего не строит, просто перехватывает движение
         // когда летят пули. В остальное время игрок управляет сам.
