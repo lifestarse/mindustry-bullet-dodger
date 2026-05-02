@@ -227,6 +227,9 @@ public final class BulletDodger {
         bestDanger = 0;
         bulletsScanned = 0;
         enemyBullets = 0;
+        // КРИТИЧНО: сбрасываем preferStandStill в начале каждого compute, иначе stale-флаг
+        // с прошлого тика заставит DodgerMod не двигаться навсегда после исчезновения угроз.
+        preferStandStill = false;
 
         if (unit == null || unit.dead) return evade;
 
@@ -311,7 +314,6 @@ public final class BulletDodger {
         }
 
         // выходим если оба безопасны (стоять и идти в pivot)
-        preferStandStill = false;
         if (dangerStill <= 1e-3f && dangerIntent <= 1e-3f) return evade;
 
         // если идти в pivot опасно, а стоять — нет, флаг "стоять и не идти".
