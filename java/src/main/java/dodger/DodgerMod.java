@@ -1,4 +1,4 @@
-// Build: 12
+// Build: 13
 package dodger;
 
 import arc.Core;
@@ -68,7 +68,8 @@ public class DodgerMod extends Mod {
             t.sliderPref("dodger.minDist", PivotPlanner.DEFAULT_MIN_DIST,    20, 120,  5,
                 v -> v + " px (lower = aggressiver)");
             // тумблеры post-7 фич — выключаем по одному для диагностики
-            t.checkPref("dodger.physics",      true);  // build 8: физическая симуляция accel/drag
+            // physics: ВЫКЛ по умолчанию, т.к. vel.set игнорит accel. Включать только с movePref.
+            t.checkPref("dodger.physics",      false); // build 8: физическая симуляция accel/drag
             t.checkPref("dodger.lifetime",     true);  // build 8: учёт оставшегося времени жизни пуль
             t.checkPref("dodger.hysteresis",   true);  // build 8: continuity бонус
             t.checkPref("dodger.damageWeight", true);  // build 8: вес угрозы по урону пули

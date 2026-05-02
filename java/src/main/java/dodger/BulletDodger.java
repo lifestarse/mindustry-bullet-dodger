@@ -1,4 +1,4 @@
-// Build: 12
+// Build: 13
 package dodger;
 
 import arc.Core;
@@ -121,7 +121,9 @@ public final class BulletDodger {
         int samples = clampInt(Core.settings.getInt("dodger.samples", DEFAULT_SAMPLES), 8, 720);
         int steps   = clampInt(Core.settings.getInt("dodger.steps",   DEFAULT_STEPS),   1, 3);
         int beam    = clampInt(Core.settings.getInt("dodger.beamWidth", DEFAULT_BEAM_WIDTH), 1, BEAM_MAX);
-        fPhysics      = Core.settings.getBool("dodger.physics",      true);
+        // physics OFF по умолчанию: мы пишем unit.vel.set, скорость меняется мгновенно.
+        // Включать имеет смысл только если переключаешься на movePref-управление.
+        fPhysics      = Core.settings.getBool("dodger.physics",      false);
         fLifetime     = Core.settings.getBool("dodger.lifetime",     true);
         fHysteresis   = Core.settings.getBool("dodger.hysteresis",   true);
         fDamageWeight = Core.settings.getBool("dodger.damageWeight", true);
