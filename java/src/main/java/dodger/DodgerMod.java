@@ -1,4 +1,4 @@
-// Build: 17
+// Build: 18
 package dodger;
 
 import arc.Core;
@@ -83,6 +83,7 @@ public class DodgerMod extends Mod {
             t.checkPref("dodger.homingSim",    true);  // build 14: итеративная симуляция homing-пуль
             t.checkPref("dodger.subtick",      true);  // build 14: sub-tick CPA через параболу
             t.checkPref("dodger.preferMotion", true);  // build 17: бонус за продолжение текущего вектора движения
+            t.checkPref("dodger.drift",        false); // build 18: Lissajous-дрейф pivot'а; OFF = статика
             // ping compensation: сдвигает положение пуль вперёд на RTT.
             t.checkPref("dodger.pingAuto", true);  // если в multiplayer — берём пинг из netClient
             t.sliderPref("dodger.pingMs", 0, 0, 500, 10,
@@ -220,12 +221,16 @@ public class DodgerMod extends Mod {
             return;
         }
 
-        // дрейфующая цель: pivot + Lissajous offset
-        driftPhase += 1f;
-        driftedPivot.set(
-            planner.currentPivot.x + DRIFT_R * arc.math.Mathf.sin(driftPhase / DRIFT_PERIOD_X),
-            planner.currentPivot.y + DRIFT_R * arc.math.Mathf.cos(driftPhase / DRIFT_PERIOD_Y)
-        );
+        // дрейфующая цель: pivot + Lissajous offset (если включено), иначе статика
+        if (Core.settings.getBool("dodger.drift", false)) {
+            driftPhase += 1f;
+            driftedPivot.set(
+                planner.currentPivot.x + DRIFT_R * arc.math.Mathf.sin(driftPhase / DRIFT_PERIOD_X),
+                planner.currentPivot.y + DRIFT_R * arc.math.Mathf.cos(driftPhase / DRIFT_PERIOD_Y)
+            );
+        } else {
+            driftedPivot.set(planner.currentPivot);
+        }
 
         populateZones(unit);
         Vec2 evade = dodger.compute(unit, driftedPivot);
