@@ -301,10 +301,11 @@ public final class BulletDodger {
         Vec2 endVel = simulate(ux, uy, uvx, uvy, 0f, 0f, speed, accel, drag);
         float dangerStill = scoreSim(0f) + zonesPenalty() + edgePenalty();
 
-        // baseline 2: opanered intended-направление (GOTO в pivot)
-        // даже если стоять безопасно, движение в pivot может пройти через пулю.
+        // baseline 2: проверяем intended-направление (GOTO в pivot). Проверяем ВСЕГДА когда
+        // intended не null — даже при малой магнитуде, потому что если drone движется хоть чуть-чуть
+        // к pivot, это движение может пересечь пулю.
         float dangerIntent = 0f;
-        if (intended != null && intended.len2() > 0.01f) {
+        if (intended != null) {
             simulate(ux, uy, uvx, uvy, intended.x, intended.y, speed, accel, drag);
             dangerIntent = scoreSim(0f) + zonesPenalty() + edgePenalty();
         }
