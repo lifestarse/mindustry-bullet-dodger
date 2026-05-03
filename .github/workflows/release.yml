@@ -1,0 +1,71 @@
+name: Build & Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag (e.g. v1.0.0). Required for manual run.'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: tag
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Fetch Mindustry & Arc jars
+        run: |
+          mkdir -p java/libs
+          curl -fL --retry 4 --retry-delay 5 -o java/libs/mindustry-core.jar \
+            'https://jitpack.io/com/github/Anuken/Mindustry/core/v146/core-v146.jar'
+          curl -fL --retry 4 --retry-delay 5 -o java/libs/arc-core.jar \
+            'https://jitpack.io/com/github/Anuken/Arc/arc-core/v154/arc-core-v154.jar'
+
+      - name: Compile
+        working-directory: java
+        run: |
+          mkdir -p build/classes dist
+          javac -encoding UTF-8 \
+            -cp "libs/mindustry-core.jar:libs/arc-core.jar" \
+            -d build/classes \
+            src/main/java/dodger/*.java
+          cp mod.hjson build/classes/
+
+      - name: Package jar
+        working-directory: java
+        run: jar cf dist/Dodger.jar -C build/classes .
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: Dodger.jar
+          path: java/dist/Dodger.jar
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          name: ${{ steps.tag.outputs.name }}
+          generate_release_notes: true
+          files: java/dist/Dodger.jar

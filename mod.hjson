@@ -3,5 +3,5 @@ displayName: "Bullet Dodger"
 author: "user"
 description: "Auto-dodges incoming bullets using realtime trajectory prediction."
 version: "1.0"
-minGameVersion: "146"
+minGameVersion: "154"
 hidden: false
