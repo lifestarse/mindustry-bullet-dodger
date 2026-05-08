@@ -42,7 +42,7 @@ jobs:
           curl -fL --retry 4 --retry-delay 5 -o java/libs/arc-core.jar \
             'https://jitpack.io/com/github/Anuken/Arc/arc-core/v154/arc-core-v154.jar'
 
-      - name: Compile
+      - name: Compile Java mod
         working-directory: java
         run: |
           mkdir -p build/classes dist
@@ -52,15 +52,23 @@ jobs:
             src/main/java/dodger/*.java
           cp mod.hjson build/classes/
 
-      - name: Package jar
+      - name: Package Java jar
         working-directory: java
         run: jar cf dist/Dodger.jar -C build/classes .
 
-      - name: Upload artifact
+      - name: Package JS zip
+        run: |
+          mkdir -p dist
+          # JS-мод: только корневой mod.hjson + scripts/, без java/, .github/, README.md и пр.
+          zip -r dist/Dodger-JS.zip mod.hjson scripts/
+
+      - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: Dodger.jar
-          path: java/dist/Dodger.jar
+          name: dodger-builds
+          path: |
+            java/dist/Dodger.jar
+            dist/Dodger-JS.zip
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -68,4 +76,23 @@ jobs:
           tag_name: ${{ steps.tag.outputs.name }}
           name: ${{ steps.tag.outputs.name }}
           generate_release_notes: true
-          files: java/dist/Dodger.jar
+          body: |
+            ## Установка
+
+            **Java-версия (рекомендуется, полный функционал):**
+            1. Скачай `Dodger.jar` ниже
+            2. Положи в папку модов Mindustry:
+               - Steam: `<Mindustry>/saves/mods/`
+               - Standalone: `%AppData%/Mindustry/mods/` (Windows) или `~/.local/share/Mindustry/mods/` (Linux)
+            3. Перезапусти игру, включи в Settings → Mods
+
+            **JS-версия (упрощённая, fallback):**
+            1. Скачай `Dodger-JS.zip` ниже
+            2. Закинь zip целиком (не распаковывай) в ту же папку модов
+            3. Перезапусти игру
+
+            Включение: `Ctrl+Shift+B` или Settings → Dodger.
+          files: |
+            java/dist/Dodger.jar
+            dist/Dodger-JS.zip
+            
