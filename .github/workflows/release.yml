@@ -34,6 +34,11 @@ jobs:
           distribution: temurin
           java-version: '17'
 
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'build-tools;34.0.0 platform-tools'
+
       - name: Fetch Mindustry & Arc jars
         run: |
           mkdir -p java/libs
@@ -52,14 +57,50 @@ jobs:
             src/main/java/dodger/*.java
           cp mod.hjson build/classes/
 
-      - name: Package Java jar
+      - name: Convert classes to DEX (Android compat)
+        working-directory: java
+        run: |
+          # d8 находится в build-tools директории
+          D8="$ANDROID_HOME/build-tools/34.0.0/d8"
+          # Собираем все .class файлы
+          find build/classes -name "*.class" > class_list.txt
+          # Конвертация в classes.dex
+          # --min-api 14 для совместимости со старыми Android (Mindustry поддерживает),
+          # --no-desugaring чтобы не тащить лишнее (мод простой, без stream API и пр.)
+          $D8 --min-api 14 --no-desugaring --output build/classes \
+            $(cat class_list.txt) \
+            --lib "$ANDROID_HOME/platforms/android-34/android.jar" \
+            --classpath libs/mindustry-core.jar \
+            --classpath libs/arc-core.jar
+          ls -la build/classes/
+          rm class_list.txt
+
+      - name: Package Java jar (universal — desktop + Android)
         working-directory: java
         run: jar cf dist/Dodger.jar -C build/classes .
+
+      - name: Verify jar contents
+        working-directory: java
+        run: |
+          echo "=== Contents of Dodger.jar ==="
+          unzip -l dist/Dodger.jar
+          echo ""
+          if unzip -l dist/Dodger.jar | grep -q classes.dex; then
+            echo "OK: classes.dex present (Android-compatible)"
+          else
+            echo "WARN: classes.dex missing — Android won't load this jar"
+            exit 1
+          fi
+          if unzip -l dist/Dodger.jar | grep -q "DodgerMod.class"; then
+            echo "OK: DodgerMod.class present (desktop-compatible)"
+          else
+            echo "WARN: DodgerMod.class missing — desktop won't load this jar"
+            exit 1
+          fi
 
       - name: Package JS zip
         run: |
           mkdir -p dist
-          # JS-мод: только корневой mod.hjson + scripts/, без java/, .github/, README.md и пр.
           zip -r dist/Dodger-JS.zip mod.hjson scripts/
 
       - name: Upload artifacts
@@ -79,19 +120,20 @@ jobs:
           body: |
             ## Установка
 
-            **Java-версия (рекомендуется, полный функционал):**
+            **Dodger.jar** — основной файл, работает и на десктопе, и на Android.
+
             1. Скачай `Dodger.jar` ниже
             2. Положи в папку модов Mindustry:
-               - Steam: `<Mindustry>/saves/mods/`
-               - Standalone: `%AppData%/Mindustry/mods/` (Windows) или `~/.local/share/Mindustry/mods/` (Linux)
+               - **Android:** `/storage/emulated/0/Android/data/io.anuke.mindustry/files/mods/`
+                 (или через файловый менеджер: Внутр. память → Android → data → io.anuke.mindustry → files → mods)
+               - **Steam:** `<Mindustry>/saves/mods/`
+               - **Standalone Windows:** `%AppData%/Mindustry/mods/`
+               - **Standalone Linux:** `~/.local/share/Mindustry/mods/`
             3. Перезапусти игру, включи в Settings → Mods
 
-            **JS-версия (упрощённая, fallback):**
-            1. Скачай `Dodger-JS.zip` ниже
-            2. Закинь zip целиком (не распаковывай) в ту же папку модов
-            3. Перезапусти игру
+            Включение в бою: `Ctrl+Shift+B` (десктоп) или Settings → Dodger.
 
-            Включение: `Ctrl+Shift+B` или Settings → Dodger.
+            **Dodger-JS.zip** — упрощённая JS-версия, fallback. Только базовое уклонение по CPA.
           files: |
             java/dist/Dodger.jar
             dist/Dodger-JS.zip
