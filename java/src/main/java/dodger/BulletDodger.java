@@ -181,12 +181,14 @@ public final class BulletDodger {
     }
 
     private static final class BeamEntry {
-        float score;
-        float dx, dy;
-        float endX, endY;
-        float endVx, endVy;
-        int   ancestor;
-    }
+    float score;
+    float dx, dy;
+    float endX, endY;
+    float endVx, endVy;
+    int   ancestor;
+    
+    BeamEntry() {}  // <-- добавить эту строку
+}
 
     private static void resetBeam(BeamEntry[] beam, int width) {
         for (int i = 0; i < width; i++) beam[i].score = Float.POSITIVE_INFINITY;
