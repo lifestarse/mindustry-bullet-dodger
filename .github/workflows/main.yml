@@ -1,33 +1,19 @@
-name: Build & Release
+name: CI
 
 on:
   push:
-    tags:
-      - 'v*'
-  workflow_dispatch:
-    inputs:
-      tag:
-        description: 'Release tag (e.g. v1.0.0). Required for manual run.'
-        required: true
-        type: string
+    branches: [main]
+  pull_request:
+    branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
-      - name: Resolve tag
-        id: tag
-        run: |
-          if [ "${{ github.event_name }}" = "push" ]; then
-            echo "name=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
-          else
-            echo "name=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
-          fi
 
       - uses: actions/setup-java@v4
         with:
@@ -51,47 +37,11 @@ jobs:
             -d build/classes \
             src/main/java/dodger/*.java
           cp mod.hjson build/classes/
+          jar cf dist/Dodger.jar -C build/classes .
 
-      - name: Package Java jar
-        working-directory: java
-        run: jar cf dist/Dodger.jar -C build/classes .
-
-      - name: Package JS zip
+      - name: Validate JS mod structure
         run: |
-          mkdir -p dist
-          # JS-мод: только корневой mod.hjson + scripts/, без java/, .github/, README.md и пр.
-          zip -r dist/Dodger-JS.zip mod.hjson scripts/
-
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: dodger-builds
-          path: |
-            java/dist/Dodger.jar
-            dist/Dodger-JS.zip
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ steps.tag.outputs.name }}
-          name: ${{ steps.tag.outputs.name }}
-          generate_release_notes: true
-          body: |
-            ## Установка
-
-            **Java-версия (рекомендуется, полный функционал):**
-            1. Скачай `Dodger.jar` ниже
-            2. Положи в папку модов Mindustry:
-               - Steam: `<Mindustry>/saves/mods/`
-               - Standalone: `%AppData%/Mindustry/mods/` (Windows) или `~/.local/share/Mindustry/mods/` (Linux)
-            3. Перезапусти игру, включи в Settings → Mods
-
-            **JS-версия (упрощённая, fallback):**
-            1. Скачай `Dodger-JS.zip` ниже
-            2. Закинь zip целиком (не распаковывай) в ту же папку модов
-            3. Перезапусти игру
-
-            Включение: `Ctrl+Shift+B` или Settings → Dodger.
-          files: |
-            java/dist/Dodger.jar
-            dist/Dodger-JS.zip
+          test -f mod.hjson || (echo "root mod.hjson missing" && exit 1)
+          test -f scripts/main.js || (echo "scripts/main.js missing" && exit 1)
+          node --check scripts/main.js
+          
