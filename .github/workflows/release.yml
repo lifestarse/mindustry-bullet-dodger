@@ -60,14 +60,12 @@ jobs:
       - name: Convert classes to DEX (Android compat)
         working-directory: java
         run: |
-          # d8 находится в build-tools директории
           D8="$ANDROID_HOME/build-tools/34.0.0/d8"
-          # Собираем все .class файлы
           find build/classes -name "*.class" > class_list.txt
-          # Конвертация в classes.dex
-          # --min-api 14 для совместимости со старыми Android (Mindustry поддерживает),
-          # --no-desugaring чтобы не тащить лишнее (мод простой, без stream API и пр.)
-          $D8 --min-api 14 --no-desugaring --output build/classes \
+          # --min-api 21 — Android 5.0+, покрывает 99% устройств с Mindustry.
+          # БЕЗ --no-desugaring — d8 развернёт lambdas, method refs и др. в обычные классы,
+          # иначе на API < 26 invoke-dynamic просто не работает и мод вылетает в init().
+          $D8 --min-api 21 --output build/classes \
             $(cat class_list.txt) \
             --lib "$ANDROID_HOME/platforms/android-34/android.jar" \
             --classpath libs/mindustry-core.jar \
