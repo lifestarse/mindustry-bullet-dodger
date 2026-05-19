@@ -96,18 +96,11 @@ jobs:
             exit 1
           fi
 
-      - name: Package JS zip
-        run: |
-          mkdir -p dist
-          zip -r dist/Dodger-JS.zip mod.hjson scripts/
-
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: dodger-builds
-          path: |
-            java/dist/Dodger.jar
-            dist/Dodger-JS.zip
+          path: java/dist/Dodger.jar
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -118,7 +111,7 @@ jobs:
           body: |
             ## Установка
 
-            **Dodger.jar** — основной файл, работает и на десктопе, и на Android.
+            **Dodger.jar** — единственный артефакт, работает и на десктопе, и на Android.
 
             1. Скачай `Dodger.jar` ниже
             2. Положи в папку модов Mindustry:
@@ -130,9 +123,5 @@ jobs:
             3. Перезапусти игру, включи в Settings → Mods
 
             Включение в бою: `Ctrl+Shift+B` (десктоп) или Settings → Dodger.
+          files: java/dist/Dodger.jar
 
-            **Dodger-JS.zip** — упрощённая JS-версия, fallback. Только базовое уклонение по CPA.
-          files: |
-            java/dist/Dodger.jar
-            dist/Dodger-JS.zip
-            
