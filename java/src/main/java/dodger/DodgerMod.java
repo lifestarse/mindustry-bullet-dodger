@@ -1,4 +1,4 @@
-// Build: 18
+// Build: 19
 package dodger;
 
 import arc.Core;
@@ -51,6 +51,15 @@ public class DodgerMod extends Mod {
     private final Vec2 driftedPivot  = new Vec2();
     private float      driftPhase    = 0f;
     private boolean    lastWasEvade  = false;
+
+    // === PASSIVE MODE STATE ===
+    private final Vec2 passiveAnchor    = new Vec2();
+    private boolean    hasPassiveAnchor = false;
+    private final Vec2 passiveIntent    = new Vec2();
+    private final Vec2 passiveZero      = new Vec2();
+    private final Vec2 inputBuf         = new Vec2();
+    /** Совпадает с OrbitController.DEAD_ZONE — порог "уже на anchor". */
+    private static final float ANCHOR_DEAD_ZONE = 4f;
 
     // === STATISTICS ===
     private float lastHp = -1f;
@@ -209,6 +218,24 @@ public class DodgerMod extends Mod {
     private boolean isHunt()           { return Core.settings.getBool(KEY_HUNT, false); }
     private void    setEnabled(boolean v) { Core.settings.put(KEY_ENABLED, v); }
 
+    /** Намерение игрока для passive: единичный WASD-вектор × unit.speed.
+     *  Длина 0 если WASD не зажаты. Mouse/touch не читаются — passive интерпретирует
+     *  отсутствие WASD как "игрок стоит", выставляет anchor. */
+    private Vec2 readPlayerIntent(Unit unit) {
+        inputBuf.setZero();
+        if (Core.input == null) return inputBuf;
+        float dx = 0f, dy = 0f;
+        if (Core.input.keyDown(KeyCode.w)) dy += 1f;
+        if (Core.input.keyDown(KeyCode.s)) dy -= 1f;
+        if (Core.input.keyDown(KeyCode.d)) dx += 1f;
+        if (Core.input.keyDown(KeyCode.a)) dx -= 1f;
+        if (dx == 0f && dy == 0f) return inputBuf;
+        float len = arc.math.Mathf.sqrt(dx*dx + dy*dy);
+        float speed = unit.type.speed;
+        inputBuf.set(dx / len * speed, dy / len * speed);
+        return inputBuf;
+    }
+
     /** Поиск ближайшего враждебного юнита в HUNT_RANGE. */
     private Unit findHuntTarget(Unit me) {
         Unit[] best = { null };
@@ -277,29 +304,91 @@ public class DodgerMod extends Mod {
         // single-shot stats per tick — после фактической работы dodger'а
         updateStats(unit);
 
-        // PASSIVE MODE: мод не баитит, ничего не строит, просто перехватывает движение
-        // когда летят пули. В остальное время игрок управляет сам.
+        // PASSIVE MODE: мод не баитит, ничего не строит. Логика уклонения — та же, что
+        // active против турелей: compute(unit, pivot, intended).
+        //
+        //   игрок ДВИГАЛСЯ (WASD)  → intent = WASD-вектор, pivot = null.
+        //                            evade пытается сохранить направление через motion bonus.
+        //                            если безопасно — не перезаписываем vel, игрок рулит сам.
+        //   игрок СТОЯЛ            → anchor = позиция в момент перехода. pivot = anchor,
+        //                            intent = возврат к anchor (если drone снесло evade-ом).
+        //                            если безопасно — возвращаемся к anchor.
+        //
+        // Anchor сбрасывается при возобновлении WASD.
         if (isPassive()) {
             populateZones(unit);
-            Vec2 evade = dodger.compute(unit, null);  // null pivot = без bias
-            if (evade.len2() > 0.01f) {
-                if (useMovePref()) {
-                    try { unit.movePref(evade); } catch (Throwable t) { unit.vel.set(evade); }
+
+            Vec2 intent = readPlayerIntent(unit);
+            boolean playerMoving = intent.len2() > 0.01f;
+
+            if (playerMoving) {
+                hasPassiveAnchor = false;
+            } else if (!hasPassiveAnchor) {
+                passiveAnchor.set(unit.x, unit.y);
+                hasPassiveAnchor = true;
+            }
+
+            Vec2 pivot;
+            Vec2 intended;
+            if (playerMoving) {
+                pivot = null;
+                intended = intent;
+            } else if (hasPassiveAnchor) {
+                pivot = passiveAnchor;
+                float adx = passiveAnchor.x - unit.x;
+                float ady = passiveAnchor.y - unit.y;
+                float ar  = arc.math.Mathf.sqrt(adx*adx + ady*ady);
+                if (ar > ANCHOR_DEAD_ZONE) {
+                    float speed = unit.type.speed;
+                    intended = passiveIntent.set(adx / ar * speed, ady / ar * speed);
                 } else {
-                    unit.vel.set(evade);
+                    intended = null;
                 }
-                lastWasEvade = true;
-                lastFinal.set(evade);
             } else {
+                pivot = null;
+                intended = null;
+            }
+
+            Vec2 evade = dodger.compute(unit, pivot, intended);
+            Vec2 finalMove = null;
+            String modeTag;
+
+            if (evade.len2() > 0.01f) {
+                finalMove = evade;
+                lastWasEvade = true;
+                modeTag = "EVADE";
+            } else if (dodger.preferStandStill) {
+                finalMove = passiveZero.setZero();
+                lastWasEvade = true;
+                modeTag = "FREEZE";
+            } else if (!playerMoving && intended != null) {
+                finalMove = intended;
                 lastWasEvade = false;
+                modeTag = "RETURN";
+            } else {
+                // safe + player moving → не перезаписываем vel, игрок рулит сам.
+                // safe + player not moving + at anchor → drone стоит, ничего не делаем.
+                lastWasEvade = false;
+                modeTag = playerMoving ? "PASS" : "IDLE";
+            }
+
+            if (finalMove != null) {
+                if (useMovePref()) {
+                    try { unit.movePref(finalMove); } catch (Throwable t) { unit.vel.set(finalMove); }
+                } else {
+                    unit.vel.set(finalMove);
+                }
+                lastFinal.set(finalMove);
+            } else {
                 lastFinal.setZero();
             }
-            // лог
+
             if (++ticksSinceLog >= LOG_PERIOD_TICKS) {
                 Log.info(String.format(
-                    "[dodger PASSIVE] scanned=%d enemy=%d hits-after-evade=%d danger=%.2f | mode=%s | move=(%.2f,%.2f) vel=(%.2f,%.2f)",
+                    "[dodger PASSIVE] scanned=%d enemy=%d hits-after-evade=%d danger=%.2f | mode=%s anchor=%s | move=(%.2f,%.2f) vel=(%.2f,%.2f)",
                     dodger.bulletsScanned, dodger.enemyBullets, dodger.threatCount, dodger.bestDanger,
-                    lastWasEvade ? "EVADE" : "IDLE",
+                    modeTag,
+                    hasPassiveAnchor ? String.format("(%.0f,%.0f)", passiveAnchor.x, passiveAnchor.y) : "none",
                     lastFinal.x, lastFinal.y, unit.vel.x, unit.vel.y));
                 ticksSinceLog = 0;
             }

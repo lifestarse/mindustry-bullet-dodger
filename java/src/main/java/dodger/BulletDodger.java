@@ -1,4 +1,4 @@
-// Build: 18
+// Build: 19
 package dodger;
 
 import arc.Core;
@@ -261,6 +261,19 @@ public final class BulletDodger {
             motionFactor = Math.min(1f, vlen / unit.type.speed);
         } else {
             motionNx = 0f; motionNy = 0f; motionFactor = 0f;
+        }
+        // override motion-bias direction from caller-supplied intent when provided.
+        // Без этого после первого evade unit.vel = evade-вектор, и motion bonus
+        // подкрепляет evade-направление вместо игрового намерения (WASD в passive
+        // или gotoMove в active). С override beam search предпочитает альтернативы,
+        // продолжающие intent, что и просил юзер: "preserve direction".
+        if (intended != null) {
+            float ilen = Mathf.sqrt(intended.x*intended.x + intended.y*intended.y);
+            if (ilen > 0.1f) {
+                motionNx = intended.x / ilen;
+                motionNy = intended.y / ilen;
+                motionFactor = 1f;
+            }
         }
 
         // ping compensation: bullets are shifted forward by RTT, so my command applies on a state

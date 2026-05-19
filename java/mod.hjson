@@ -2,7 +2,7 @@ name: dodger
 displayName: "Bullet Dodger"
 author: "user"
 description: "Auto-bait & dodge for Duo/Salvo turrets. Hotkey: Ctrl+Shift+B"
-version: "1.0"
+version: "1.0.5"
 minGameVersion: "154"
 main: "dodger.DodgerMod"
 java: true
